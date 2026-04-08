@@ -1,61 +1,103 @@
 @echo off
-chcp 65001 >nul
-setlocal
+setlocal EnableDelayedExpansion
 
 echo ==============================================
-echo   naver-stock-mcp 자동 설치 (Windows)
+echo   naver-stock-mcp Installer (Windows)
 echo ==============================================
 echo.
 
-REM [1/3] Python 설치 확인
-echo [1/3] Python 설치 확인...
+REM [1/3] Find Python
+echo [1/3] Checking Python...
+
+set "PYTHON_CMD="
+
+REM Try python in PATH first
 python --version >nul 2>&1
+if not errorlevel 1 (
+    set "PYTHON_CMD=python"
+    goto :found_python
+)
+
+REM Try python3 in PATH
+python3 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PYTHON_CMD=python3"
+    goto :found_python
+)
+
+REM Try py launcher
+py -3 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PYTHON_CMD=py -3"
+    goto :found_python
+)
+
+REM Search common install locations
+for %%P in (
+    "%LOCALAPPDATA%\Programs\Python\Python315\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+    "C:\Python315\python.exe"
+    "C:\Python314\python.exe"
+    "C:\Python313\python.exe"
+    "C:\Python312\python.exe"
+    "C:\Python311\python.exe"
+) do (
+    if exist %%P (
+        set "PYTHON_CMD=%%~P"
+        goto :found_python
+    )
+)
+
+REM Python not found
+echo       [FAIL] Python is not installed.
+echo.
+echo       Please install Python 3.11+ first:
+echo       https://www.python.org/downloads/
+echo.
+echo       IMPORTANT: Check "Add Python to PATH" during installation.
+echo.
+pause
+exit /b 1
+
+:found_python
+for /f "tokens=*" %%v in ('!PYTHON_CMD! --version 2^>^&1') do set PYVER=%%v
+echo       [OK] %PYVER% found
+echo       Using: !PYTHON_CMD!
+echo.
+
+REM [2/3] Install package from PyPI
+echo [2/3] Installing naver-stock-mcp...
+!PYTHON_CMD! -m pip install --upgrade naver-stock-mcp
 if errorlevel 1 (
-    echo       X Python이 설치되어 있지 않습니다.
-    echo.
-    echo       먼저 Python 3.11 이상을 설치해주세요:
-    echo       https://www.python.org/downloads/
-    echo.
-    echo       설치 시 "Add Python to PATH" 체크박스를 반드시 체크하세요.
+    echo       [FAIL] Package installation failed.
     echo.
     pause
     exit /b 1
 )
-
-for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PYVER=%%v
-echo       O Python %PYVER% 감지됨
+echo       [OK] naver-stock-mcp installed
 echo.
 
-REM [2/3] PyPI에서 패키지 설치 (또는 업그레이드)
-echo [2/3] naver-stock-mcp 설치 중...
-python -m pip install --upgrade naver-stock-mcp
+REM [3/3] Configure Claude Desktop
+echo [3/3] Configuring Claude Desktop...
+!PYTHON_CMD! -m stock_mcp_server.setup_claude stock-mcp-server
 if errorlevel 1 (
-    echo       X 패키지 설치 실패
-    echo.
-    pause
-    exit /b 1
-)
-echo       O naver-stock-mcp 설치 완료
-echo.
-
-REM [3/3] Claude Desktop 설정
-echo [3/3] Claude Desktop 설정 중...
-python -m stock_mcp_server.setup_claude stock-mcp-server
-if errorlevel 1 (
-    echo       X Claude Desktop 설정 실패
+    echo       [FAIL] Claude Desktop configuration failed.
     pause
     exit /b 1
 )
 echo.
 
 echo ==============================================
-echo   설치가 완료되었습니다!
+echo   Installation complete!
 echo ==============================================
 echo.
-echo 다음 단계:
-echo   1. Claude Desktop을 완전히 종료하세요.
-echo      (트레이 아이콘 우클릭 -^> Quit)
-echo   2. Claude Desktop을 다시 실행하세요.
-echo   3. "삼성전자 현재가 알려줘" 라고 질문해보세요.
+echo Next steps:
+echo   1. Quit Claude Desktop completely.
+echo      (Right-click tray icon, then Quit)
+echo   2. Restart Claude Desktop.
+echo   3. Ask: "Samsung current price" to test.
 echo.
 pause

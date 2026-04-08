@@ -1,6 +1,6 @@
-"""Claude Desktop 설정에 stock-data MCP 서버를 등록하는 CLI.
+"""Configure Claude Desktop to use the stock-data MCP server.
 
-설치 후 `stock-mcp-setup` 명령어로 실행할 수 있습니다.
+Run `stock-mcp-setup` after installing the package.
 """
 
 import json
@@ -10,11 +10,10 @@ from pathlib import Path
 
 
 def get_config_path() -> Path:
-    """OS별 Claude Desktop 설정 파일 경로를 반환합니다."""
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA")
         if not appdata:
-            raise RuntimeError("APPDATA 환경변수를 찾을 수 없습니다.")
+            raise RuntimeError("APPDATA environment variable not found.")
         return Path(appdata) / "Claude" / "claude_desktop_config.json"
     elif sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
@@ -34,9 +33,9 @@ def configure(command: str = "stock-mcp-server") -> None:
             backup_path = config_path.with_suffix(".json.backup")
             with open(backup_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
-            print(f"  [OK] 기존 설정 백업: {backup_path}")
+            print(f"  [OK] Backup saved: {backup_path}")
         except json.JSONDecodeError:
-            print("  [WARN] 기존 설정 파일이 손상되어 있습니다. 새로 만듭니다.")
+            print("  [WARN] Existing config is corrupted. Creating new one.")
             config = {}
     else:
         config = {}
@@ -49,23 +48,22 @@ def configure(command: str = "stock-mcp-server") -> None:
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
 
-    print(f"  [OK] 설정 파일 업데이트 완료")
-    print(f"  경로: {config_path}")
+    print(f"  [OK] Config updated")
+    print(f"  Path: {config_path}")
 
 
 def main():
     command = sys.argv[1] if len(sys.argv) > 1 else "stock-mcp-server"
     print("==============================================")
-    print("  naver-stock-mcp - Claude Desktop 설정")
+    print("  naver-stock-mcp - Claude Desktop Setup")
     print("==============================================")
     print()
     try:
         configure(command)
         print()
-        print("설정이 완료되었습니다.")
-        print("Claude Desktop을 완전히 종료했다가 다시 실행하세요.")
+        print("Done! Please restart Claude Desktop.")
     except Exception as e:
-        print(f"  [ERROR] 오류: {e}", file=sys.stderr)
+        print(f"  [ERROR] {e}", file=sys.stderr)
         sys.exit(1)
 
 

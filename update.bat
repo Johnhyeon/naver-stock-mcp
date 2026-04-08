@@ -1,32 +1,32 @@
 @echo off
-chcp 65001 >nul
+chcp 65001 >nul 2>nul
 setlocal
 
 echo ==============================================
-echo   naver-stock-mcp 업데이트
+echo   naver-stock-mcp Update
 echo ==============================================
 echo.
 
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo Python이 설치되어 있지 않습니다.
+    echo Python is not installed.
     pause
     exit /b 1
 )
 
-echo 최신 버전으로 업데이트 중...
+echo Updating to latest version...
 python -m pip install --upgrade naver-stock-mcp
 if errorlevel 1 (
-    echo 업데이트 실패
+    echo Update failed.
     pause
     exit /b 1
 )
 
 echo.
 echo ==============================================
-echo   업데이트 완료!
+echo   Update complete!
 echo ==============================================
 echo.
-echo Claude Desktop을 완전히 종료했다가 다시 실행하세요.
+echo Please restart Claude Desktop.
 echo.
 pause
