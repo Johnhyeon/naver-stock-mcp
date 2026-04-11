@@ -1,20 +1,19 @@
-"""네이버 증권에서 주식 데이터를 수집하는 모듈."""
+"""네이버 증권에서 주식 데이터를 수집하는 모듈.
 
-import httpx
-from bs4 import BeautifulSoup
-import pandas as pd
-from io import StringIO
-import json
+HTTP 요청은 _http.get_client()의 싱글톤 AsyncClient를 통해 keep-alive로 재사용한다.
+결과는 _cache.cached() 데코레이터로 TTL 캐싱 (장중/장마감 차등).
+"""
+
+import asyncio
 import re
 
+from bs4 import BeautifulSoup
+
+from stock_mcp_server._http import get_client
+from stock_mcp_server._cache import cached
 
 BASE_URL = "https://finance.naver.com"
 FCHART_URL = "https://fchart.stock.naver.com/siseJson.nhn"
-TIMEOUT = 10.0
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-}
 
 
 def _parse_int(text: str, default: int = 0) -> int:
@@ -30,14 +29,15 @@ def _parse_int(text: str, default: int = 0) -> int:
         return default
 
 
+@cached(ttl_market=600, ttl_closed=86400)  # 장중 10분, 장마감 1일
 async def search_stock(query: str) -> list[dict]:
     """종목명 또는 코드로 검색하여 종목 코드를 반환합니다."""
     # 메인 사이트 검색 페이지 사용 (ac.finance.naver.com보다 안정적)
     url = f"{BASE_URL}/search/searchList.naver"
     params = {"query": query}
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(url, params=params, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(url, params=params)
+    soup = BeautifulSoup(resp.text, "lxml")
 
     results = []
     # 검색 결과 테이블에서 종목명+코드 추출
@@ -55,6 +55,7 @@ async def search_stock(query: str) -> list[dict]:
     return results[:5]
 
 
+@cached(ttl_market=300, ttl_closed=3600)  # 장중 5분, 장마감 1시간
 async def get_ohlcv(
     code: str,
     timeframe: str = "day",
@@ -73,9 +74,9 @@ async def get_ohlcv(
         "count": count,
         "requestType": "0",
     }
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(FCHART_URL, params=params, headers=HEADERS)
-        text = resp.text
+    client = get_client()
+    resp = await client.get(FCHART_URL, params=params)
+    text = resp.text
 
     # 네이버 fchart 응답은 JS 배열 형태 → 파싱
     text = text.strip()
@@ -105,12 +106,13 @@ async def get_ohlcv(
     return rows
 
 
+@cached(ttl_market=30, ttl_closed=3600)  # 장중 30초, 장마감 1시간
 async def get_current_price(code: str) -> dict:
     """종목의 현재가 정보를 가져옵니다."""
     url = f"{BASE_URL}/item/main.naver?code={code}"
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(url, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(url)
+    soup = BeautifulSoup(resp.text, "lxml")
 
     result = {"code": code}
 
@@ -157,6 +159,7 @@ async def get_current_price(code: str) -> dict:
     return result
 
 
+@cached(ttl_market=300, ttl_closed=7200)  # 장중 5분, 장마감 2시간
 async def get_investor_flow(code: str, days: int = 20) -> list[dict]:
     """투자자별 매매동향 (기관/외국인 순매매)을 가져옵니다.
 
@@ -169,63 +172,64 @@ async def get_investor_flow(code: str, days: int = 20) -> list[dict]:
     results = []
     page = 1
 
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        while len(results) < days:
-            params = {"code": code, "page": page}
-            resp = await client.get(url, params=params, headers=HEADERS)
-            soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    while len(results) < days:
+        params = {"code": code, "page": page}
+        resp = await client.get(url, params=params)
+        soup = BeautifulSoup(resp.text, "lxml")
 
-            # 두 번째 table.type2가 수급 데이터 (첫 번째는 거래원)
-            tables = soup.select("table.type2")
-            if len(tables) < 2:
-                break
+        # 두 번째 table.type2가 수급 데이터 (첫 번째는 거래원)
+        tables = soup.select("table.type2")
+        if len(tables) < 2:
+            break
 
-            table = tables[1]
-            rows = table.select("tr")
-            found_in_page = 0
-            for row in rows:
-                cols = row.select("td")
-                # 수급 데이터 행은 정확히 9개 td를 가짐
-                if len(cols) != 9:
-                    continue
+        table = tables[1]
+        rows = table.select("tr")
+        found_in_page = 0
+        for row in rows:
+            cols = row.select("td")
+            # 수급 데이터 행은 정확히 9개 td를 가짐
+            if len(cols) != 9:
+                continue
 
-                date_text = cols[0].text.strip()
-                # 날짜 형식(YYYY.MM.DD) 체크 — 헤더/빈 행 필터링
-                if not date_text or "." not in date_text:
-                    continue
+            date_text = cols[0].text.strip()
+            # 날짜 형식(YYYY.MM.DD) 체크 — 헤더/빈 행 필터링
+            if not date_text or "." not in date_text:
+                continue
 
-                try:
-                    result = {
-                        "date": date_text,
-                        "close": _parse_int(cols[1].text),
-                        "change": _parse_int(cols[2].text.split()[-1] if cols[2].text.strip() else "0"),
-                        "volume": _parse_int(cols[4].text),
-                        "institutional": _parse_int(cols[5].text),
-                        "foreign": _parse_int(cols[6].text),
-                    }
-                    results.append(result)
-                    found_in_page += 1
-                except (ValueError, IndexError):
-                    continue
+            try:
+                result = {
+                    "date": date_text,
+                    "close": _parse_int(cols[1].text),
+                    "change": _parse_int(cols[2].text.split()[-1] if cols[2].text.strip() else "0"),
+                    "volume": _parse_int(cols[4].text),
+                    "institutional": _parse_int(cols[5].text),
+                    "foreign": _parse_int(cols[6].text),
+                }
+                results.append(result)
+                found_in_page += 1
+            except (ValueError, IndexError):
+                continue
 
-            if found_in_page == 0:
-                break  # 더 이상 데이터 없음
+        if found_in_page == 0:
+            break  # 더 이상 데이터 없음
 
-            if len(results) >= days:
-                break
-            page += 1
-            if page > 10:
-                break
+        if len(results) >= days:
+            break
+        page += 1
+        if page > 10:
+            break
 
     return results[:days]
 
 
+@cached(ttl_market=3600, ttl_closed=86400)  # 장중 1시간, 장마감 1일
 async def get_financials(code: str) -> dict:
     """종목의 주요 재무지표를 가져옵니다."""
     url = f"{BASE_URL}/item/main.naver?code={code}"
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(url, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(url)
+    soup = BeautifulSoup(resp.text, "lxml")
 
     result = {"code": code}
 
@@ -263,6 +267,7 @@ async def get_financials(code: str) -> dict:
     return result
 
 
+@cached(ttl_market=300, ttl_closed=3600)  # 장중 5분, 장마감 1시간
 async def list_themes(page: int = 1) -> list[dict]:
     """네이버 증권 테마 목록을 가져옵니다.
 
@@ -275,9 +280,9 @@ async def list_themes(page: int = 1) -> list[dict]:
         [{name, theme_id, change_rate, recent_3d_rate, up_count, flat_count, down_count, leaders}]
     """
     url = f"{BASE_URL}/sise/theme.naver"
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(url, params={"page": page}, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(url, params={"page": page})
+    soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_1.theme")
     if not table:
@@ -318,6 +323,7 @@ async def list_themes(page: int = 1) -> list[dict]:
     return results
 
 
+@cached(ttl_market=300, ttl_closed=3600)  # 장중 5분, 장마감 1시간
 async def get_theme_stocks(
     theme_name: str,
     count: int = 30,
@@ -338,47 +344,45 @@ async def get_theme_stocks(
     # 1) 모든 페이지에서 테마 검색 (부분 일치)
     theme_id = None
     matched_name = None
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        for page in range(1, 8):
-            resp = await client.get(
-                f"{BASE_URL}/sise/theme.naver",
-                params={"page": page},
-                headers=HEADERS,
-            )
-            soup = BeautifulSoup(resp.text, "lxml")
-            table = soup.select_one("table.type_1.theme")
-            if not table:
-                continue
+    client = get_client()
+    for page in range(1, 8):
+        resp = await client.get(
+            f"{BASE_URL}/sise/theme.naver",
+            params={"page": page},
+        )
+        soup = BeautifulSoup(resp.text, "lxml")
+        table = soup.select_one("table.type_1.theme")
+        if not table:
+            continue
 
-            for row in table.select("tr"):
-                cells = row.select("td")
-                if len(cells) != 8:
-                    continue
-                name_tag = cells[0].find("a")
-                if not name_tag:
-                    continue
-                name = name_tag.text.strip()
-                if theme_name in name or name_tag.text.strip().lower() == theme_name.lower():
-                    href = name_tag.get("href", "")
-                    m = re.search(r"no=(\d+)", href)
-                    if m:
-                        theme_id = m.group(1)
-                        matched_name = name
-                        break
-            if theme_id:
-                break
+        for row in table.select("tr"):
+            cells = row.select("td")
+            if len(cells) != 8:
+                continue
+            name_tag = cells[0].find("a")
+            if not name_tag:
+                continue
+            name = name_tag.text.strip()
+            if theme_name in name or name_tag.text.strip().lower() == theme_name.lower():
+                href = name_tag.get("href", "")
+                m = re.search(r"no=(\d+)", href)
+                if m:
+                    theme_id = m.group(1)
+                    matched_name = name
+                    break
+        if theme_id:
+            break
 
     if not theme_id:
         return {"theme_name": theme_name, "theme_id": None, "stocks": []}
 
     # 2) 테마 상세 페이지에서 종목 리스트 추출
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(
-            f"{BASE_URL}/sise/sise_group_detail.naver",
-            params={"type": "theme", "no": theme_id},
-            headers=HEADERS,
-        )
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(
+        f"{BASE_URL}/sise/sise_group_detail.naver",
+        params={"type": "theme", "no": theme_id},
+    )
+    soup = BeautifulSoup(resp.text, "lxml")
 
     # table.type_5가 종목 리스트
     tables = soup.select("table.type_5")
@@ -422,6 +426,7 @@ async def get_theme_stocks(
     }
 
 
+@cached(ttl_market=300, ttl_closed=3600)  # 장중 5분, 장마감 1시간
 async def list_sectors() -> list[dict]:
     """네이버 증권 업종(섹터) 목록을 가져옵니다.
 
@@ -431,9 +436,9 @@ async def list_sectors() -> list[dict]:
         [{name, sector_id, change_rate, total_count, up_count, flat_count, down_count}]
     """
     url = f"{BASE_URL}/sise/sise_group.naver"
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(url, params={"type": "upjong"}, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(url, params={"type": "upjong"})
+    soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_1")
     if not table:
@@ -467,6 +472,7 @@ async def list_sectors() -> list[dict]:
     return results
 
 
+@cached(ttl_market=300, ttl_closed=3600)  # 장중 5분, 장마감 1시간
 async def get_sector_stocks(sector_name: str, count: int = 30) -> dict:
     """특정 업종의 종목 리스트를 가져옵니다.
 
@@ -489,13 +495,12 @@ async def get_sector_stocks(sector_name: str, count: int = 30) -> dict:
         return {"sector_name": sector_name, "sector_id": None, "stocks": []}
 
     # 2) 업종 상세 페이지에서 종목 리스트 추출
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(
-            f"{BASE_URL}/sise/sise_group_detail.naver",
-            params={"type": "upjong", "no": matched["sector_id"]},
-            headers=HEADERS,
-        )
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(
+        f"{BASE_URL}/sise/sise_group_detail.naver",
+        params={"type": "upjong", "no": matched["sector_id"]},
+    )
+    soup = BeautifulSoup(resp.text, "lxml")
 
     tables = soup.select("table.type_5")
     stocks = []
@@ -587,15 +592,16 @@ def _market_to_sosok(market: str) -> str | None:
     return None
 
 
+@cached(ttl_market=60, ttl_closed=3600)  # 장중 1분, 장마감 1시간
 async def _fetch_ranking_page(url: str, sosok: str | None) -> list[dict]:
     """네이버 랭킹 페이지 HTML을 파싱해서 종목 리스트 반환.
 
     거래량/상승률/하락률 페이지 공통 구조 (12 cells).
     """
     params = {"sosok": sosok} if sosok is not None else {}
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(url, params=params, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(url, params=params)
+    soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_2")
     if not table:
@@ -642,8 +648,11 @@ async def get_volume_ranking(market: str = "ALL", count: int = 50) -> list[dict]
     url = f"{BASE_URL}/sise/sise_quant.naver"
 
     if market.upper() == "ALL":
-        kospi = await _fetch_ranking_page(url, "0")
-        kosdaq = await _fetch_ranking_page(url, "1")
+        # 병렬 페치
+        kospi, kosdaq = await asyncio.gather(
+            _fetch_ranking_page(url, "0"),
+            _fetch_ranking_page(url, "1"),
+        )
         # 거래량 기준 내림차순 병합
         merged = sorted(kospi + kosdaq, key=lambda x: x["volume"], reverse=True)
         return merged[:count]
@@ -666,9 +675,11 @@ async def get_change_ranking(direction: str = "up", market: str = "ALL", count: 
     url = f"{BASE_URL}/sise/{page}"
 
     if market.upper() == "ALL":
-        kospi = await _fetch_ranking_page(url, "0")
-        kosdaq = await _fetch_ranking_page(url, "1")
-        # 등락률 기준 정렬 — 문자열이라 _parse_int로 숫자 추출 불가, 그냥 순위 유지
+        # 병렬 페치
+        kospi, kosdaq = await asyncio.gather(
+            _fetch_ranking_page(url, "0"),
+            _fetch_ranking_page(url, "1"),
+        )
         merged = kospi + kosdaq
         # 등락률 숫자 추출해서 정렬
         def parse_rate(s: str) -> float:
@@ -685,6 +696,7 @@ async def get_change_ranking(direction: str = "up", market: str = "ALL", count: 
         return results[:count]
 
 
+@cached(ttl_market=300, ttl_closed=3600)  # 장중 5분, 장마감 1시간
 async def get_market_cap_ranking(market: str = "KOSPI", count: int = 50) -> list[dict]:
     """시가총액 상위 종목을 가져옵니다.
 
@@ -701,9 +713,9 @@ async def get_market_cap_ranking(market: str = "KOSPI", count: int = 50) -> list
         sosok = "0"
 
     url = f"{BASE_URL}/sise/sise_market_sum.naver"
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(url, params={"sosok": sosok}, headers=HEADERS)
-        soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    resp = await client.get(url, params={"sosok": sosok})
+    soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_2")
     if not table:
@@ -739,25 +751,26 @@ async def get_market_cap_ranking(market: str = "KOSPI", count: int = 50) -> list
     return results[:count]
 
 
+@cached(ttl_market=30, ttl_closed=3600)  # 장중 30초, 장마감 1시간
 async def get_market_index() -> list[dict]:
     """KOSPI, KOSDAQ 지수 현재값을 가져옵니다."""
     url = f"{BASE_URL}/sise/sise_index.naver?code=KOSPI"
     url2 = f"{BASE_URL}/sise/sise_index.naver?code=KOSDAQ"
 
     results = []
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        for idx_url, name in [(url, "KOSPI"), (url2, "KOSDAQ")]:
-            resp = await client.get(idx_url, headers=HEADERS)
-            soup = BeautifulSoup(resp.text, "lxml")
+    client = get_client()
+    for idx_url, name in [(url, "KOSPI"), (url2, "KOSDAQ")]:
+        resp = await client.get(idx_url)
+        soup = BeautifulSoup(resp.text, "lxml")
 
-            now_val = soup.select_one("div#now_value")
-            change_val = soup.select_one("div#change_value_and_rate")
+        now_val = soup.select_one("div#now_value")
+        change_val = soup.select_one("div#change_value_and_rate")
 
-            item = {"index": name}
-            if now_val:
-                item["value"] = now_val.text.strip().replace(",", "")
-            if change_val:
-                item["change"] = change_val.text.strip()
-            results.append(item)
+        item = {"index": name}
+        if now_val:
+            item["value"] = now_val.text.strip().replace(",", "")
+        if change_val:
+            item["change"] = change_val.text.strip()
+        results.append(item)
 
     return results
