@@ -78,6 +78,46 @@ mcp = FastMCP(
 - 눈금선(grid)은 PAD_L ~ AXIS_X 구간에만 그릴 것
 - tick은 AXIS_X에서 오른쪽으로 4px 짧게 표시
 - 가격 숫자는 tick 바로 오른쪽(AXIS_X + 6px)에 표시
+
+### 캔들 스페이싱 (중요)
+
+캔들 간 간격과 몸통 너비는 **가용 폭과 데이터 개수에 따라 동적 계산**할 것.
+고정값 100px 같은 값을 쓰지 말 것.
+
+**공식:**
+```
+availableW = W - PAD_L - PAD_R            # 캔들 영역 실제 폭
+step = availableW / candles.length         # 캔들 간 간격 (center-to-center)
+bodyW = max(1, step * 0.7)                 # 몸통 너비 = step의 70%
+wickStrokeW = max(1, min(1.5, bodyW / 8))  # 심지 두께
+```
+
+**제약:**
+- `step`은 최소 2px, 최대 20px로 클램프
+- 60일 일봉 기준 `step`은 대략 8~12px가 자연스러움
+- 캔들 x좌표: `x = PAD_L + (i + 0.5) * step`  (center 기준)
+- 몸통 rect의 x: `x - bodyW / 2`
+
+**나쁜 예시:**
+```javascript
+const CANDLE_W = 100;                      // ❌ 고정값, 너무 큼
+const x = i * CANDLE_W + 50;               // ❌ 폭 고려 안 함
+<rect x="${x-6}" width="12" .../>          // ❌ 간격 대비 몸통이 12%
+```
+
+**좋은 예시:**
+```javascript
+const availableW = W - PAD_L - PAD_R;
+const step = Math.max(2, Math.min(20, availableW / candles.length));
+const bodyW = Math.max(1, step * 0.7);
+candles.forEach((c, i) => {
+  const cx = PAD_L + (i + 0.5) * step;
+  // 심지
+  line(cx, py(c.high), cx, py(c.low), strokeWidth=1);
+  // 몸통
+  rect(cx - bodyW/2, py(top), bodyW, bodyH);
+});
+```
 """,
 )
 
