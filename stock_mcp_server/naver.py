@@ -580,6 +580,117 @@ async def get_multi_stocks(codes: list[str]) -> list[dict]:
     return [r for r in results if r is not None]
 
 
+async def scan_stocks_to_snapshot(
+    codes: list[str],
+    days: int = 260,
+    include_financial: bool = True,
+) -> list[dict]:
+    """여러 종목의 기본 정보 + 차트 통계 + 재무지표를 병렬로 수집.
+
+    Excel 스냅샷을 만들기 위한 고수준 헬퍼. 필요한 모든 데이터를
+    한 번에 수집해서 dict 리스트로 반환.
+
+    Args:
+        codes: 종목코드 리스트 (최대 500개)
+        days: 차트 통계용 과거 일수 (기본 260)
+        include_financial: 재무지표 포함 여부 (PER, PBR 등)
+
+    Returns:
+        각 종목마다 price/change/volume/chart_stats/financial이 합쳐진 dict
+    """
+    codes = codes[:500]
+
+    # 1) 차트 통계 (병렬)
+    chart_stats = await get_multi_chart_stats(codes, days=days)
+    stats_map = {s["code"]: s for s in chart_stats}
+
+    # 2) 기본 정보 (현재가/거래량) - 이미 chart_stats에 current_price 있음
+    # 그래도 name을 가져오기 위해 multi_stocks 호출
+    basic = await get_multi_stocks(codes[:30])  # 현재 get_multi_stocks는 30개 제한
+    # 대량일 때는 개별로 병렬 호출
+    if len(codes) > 30:
+        rest_codes = codes[30:]
+        basic_rest = []
+
+        async def fetch_basic(code: str) -> dict | None:
+            try:
+                d = await get_current_price(code)
+                if not d or "price" not in d:
+                    return None
+                return {
+                    "code": code,
+                    "name": d.get("name", ""),
+                    "price": d["price"],
+                    "volume": d.get("volume", 0),
+                }
+            except Exception:
+                return None
+
+        basic_rest = await asyncio.gather(*[fetch_basic(c) for c in rest_codes])
+        basic_rest = [r for r in basic_rest if r is not None]
+        basic = basic + basic_rest
+
+    basic_map = {b["code"]: b for b in basic}
+
+    # 3) 재무지표 (병렬) - 선택적
+    financial_map: dict[str, dict] = {}
+    if include_financial:
+        async def fetch_fin(code: str) -> tuple[str, dict] | None:
+            try:
+                fin = await get_financials(code)
+                return (code, fin) if fin else None
+            except Exception:
+                return None
+
+        fin_results = await asyncio.gather(*[fetch_fin(c) for c in codes])
+        for r in fin_results:
+            if r:
+                financial_map[r[0]] = r[1]
+
+    # 4) 병합
+    merged = []
+    for code in codes:
+        row: dict = {"code": code}
+
+        if code in basic_map:
+            b = basic_map[code]
+            row["name"] = b.get("name", "")
+            row["current_price"] = b.get("price", 0)
+            row["volume"] = b.get("volume", 0)
+
+        if code in stats_map:
+            s = stats_map[code]
+            row["high"] = s.get("high", 0)
+            row["high_date"] = s.get("high_date", "")
+            row["low"] = s.get("low", 0)
+            row["low_date"] = s.get("low_date", "")
+            row["drawdown_pct"] = s.get("drawdown_pct", 0)
+            row["recovery_pct"] = s.get("recovery_pct", 0)
+            row["period_return_pct"] = s.get("period_return_pct", 0)
+            row["avg_volume"] = s.get("avg_volume", 0)
+
+        if code in financial_map:
+            f = financial_map[code]
+            # 재무지표에서 숫자만 추출 (네이버는 문자열 반환하기도 함)
+            for key in ("PER", "PBR", "시가총액", "배당수익률", "EPS", "BPS"):
+                if key in f:
+                    val = f[key]
+                    if isinstance(val, str):
+                        # 콤마, %, 원 등 제거 후 숫자 파싱 시도
+                        cleaned = val.replace(",", "").replace("%", "").replace("원", "").strip()
+                        try:
+                            row[key.lower()] = float(cleaned)
+                        except ValueError:
+                            row[key.lower()] = val
+                    else:
+                        row[key.lower()] = val
+
+        if row.get("name"):
+            merged.append(row)
+
+    return merged
+
+
 async def get_multi_chart_stats(
     codes: list[str],
     days: int = 260,

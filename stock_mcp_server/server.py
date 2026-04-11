@@ -5,6 +5,8 @@ Claude에서 자연어로 분석할 수 있게 해줍니다.
 """
 
 import functools
+from pathlib import Path
+
 import httpx
 
 from mcp.server.fastmcp import FastMCP
@@ -24,7 +26,16 @@ from stock_mcp_server.naver import (
     get_market_cap_ranking as naver_get_market_cap_ranking,
     get_multi_stocks as naver_get_multi_stocks,
     get_multi_chart_stats as naver_get_multi_chart_stats,
+    scan_stocks_to_snapshot as naver_scan_snapshot,
 )
+from stock_mcp_server._excel import (
+    get_snapshot_dir,
+    generate_filename,
+    save_dataframe_to_excel,
+    load_excel,
+    apply_filters,
+)
+import pandas as pd
 
 
 def safe_tool(func):
@@ -618,6 +629,208 @@ async def get_multi_chart_stats(codes: list[str], days: int = 260) -> str:
             f"{s['drawdown_pct']:+.1f}% | "
             f"{s['period_return_pct']:+.1f}%"
         )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def export_to_excel(
+    data_type: str,
+    code: str = "",
+    days: int = 180,
+    filename: str = "",
+) -> str:
+    """엑셀내보내기 — 단일 종목의 데이터를 Excel 파일로 저장합니다.
+
+    Gemini/GPT 같은 다른 AI에 파일 업로드로 넘기거나,
+    엑셀에서 직접 분석/차트 작성할 때 사용합니다.
+
+    Args:
+        data_type: "chart"(일봉 OHLCV) / "flow"(투자자별 수급) / "financial"(재무지표)
+        code: 종목코드 6자리 (예: "005930")
+        days: chart/flow의 경우 과거 일수 (기본 180)
+        filename: 파일명 (비우면 자동 생성)
+
+    Returns:
+        저장된 파일 경로
+    """
+    if not code:
+        return "종목코드가 필요합니다."
+
+    if data_type == "chart":
+        data = await get_ohlcv(code, "day", days)
+        if not data:
+            return f"차트 데이터를 가져올 수 없습니다: {code}"
+        df = pd.DataFrame(data)
+        prefix = f"chart_{code}"
+        sheet = "OHLCV"
+
+    elif data_type == "flow":
+        data = await get_investor_flow(code, days)
+        if not data:
+            return f"수급 데이터를 가져올 수 없습니다: {code}"
+        df = pd.DataFrame(data)
+        prefix = f"flow_{code}"
+        sheet = "Investor Flow"
+
+    elif data_type == "financial":
+        data = await get_financials(code)
+        if not data:
+            return f"재무지표를 가져올 수 없습니다: {code}"
+        # dict → DataFrame 변환
+        rows = [{"항목": k, "값": str(v)} for k, v in data.items() if k not in ("code",)]
+        df = pd.DataFrame(rows)
+        prefix = f"financial_{code}"
+        sheet = "Financial"
+
+    else:
+        return f"지원하지 않는 data_type: {data_type}. 'chart', 'flow', 'financial' 중 선택."
+
+    fname = filename or generate_filename(prefix)
+    file_path = get_snapshot_dir() / fname
+    saved = save_dataframe_to_excel(df, file_path, sheet_name=sheet)
+
+    return (
+        f"✓ Excel 파일 저장 완료\n"
+        f"경로: {saved}\n"
+        f"행 수: {len(df)}\n"
+        f"컬럼: {', '.join(df.columns)}\n\n"
+        f"💡 이 파일을 Gemini/ChatGPT에 업로드하면 다른 AI에서도 분석할 수 있어요."
+    )
+
+
+@mcp.tool()
+@safe_tool
+async def scan_to_excel(
+    codes: list[str],
+    days: int = 260,
+    include_financial: bool = True,
+    filename: str = "",
+) -> str:
+    """시장스캔 — 여러 종목의 기본정보+차트통계+재무지표를 한 번에 수집해 Excel로 저장.
+
+    ⭐ 로컬 캐시 패턴: 한 번 스캔해두면 이후 query_excel로 즉시 반복 조회 가능.
+    DB 없이도 HTS 같은 빠른 분석 경험을 제공합니다.
+
+    사용 흐름:
+      1. scan_to_excel(KOSPI 시총 100개 코드) → 파일 저장 (한 번)
+      2. query_excel(파일경로, 조건) → 즉시 필터링 (반복)
+      3. query_excel(파일경로, 다른 조건) → 즉시
+
+    Args:
+        codes: 종목코드 리스트 (최대 500개)
+        days: 차트 통계 과거 일수 (기본 260 = 52주)
+        include_financial: 재무지표(PER/PBR) 포함 여부
+        filename: 파일명 (비우면 자동 생성)
+
+    Returns:
+        저장된 파일 경로 + 컬럼 목록
+    """
+    if not codes:
+        return "종목코드 리스트가 비어 있습니다."
+
+    rows = await naver_scan_snapshot(codes, days=days, include_financial=include_financial)
+    if not rows:
+        return "데이터를 수집하지 못했습니다."
+
+    df = pd.DataFrame(rows)
+    fname = filename or generate_filename(f"snapshot_{len(df)}stocks")
+    file_path = get_snapshot_dir() / fname
+
+    saved = save_dataframe_to_excel(
+        df,
+        file_path,
+        sheet_name="Snapshot",
+        metadata={
+            "days": days,
+            "include_financial": include_financial,
+            "requested_codes": len(codes),
+        },
+    )
+
+    return (
+        f"✓ 스냅샷 저장 완료 ({len(df)}개 종목)\n"
+        f"경로: {saved}\n"
+        f"컬럼: {', '.join(df.columns)}\n\n"
+        f"💡 이 파일을 query_excel 도구로 조건 필터링하면 즉시 분석 가능합니다.\n"
+        f"예시: query_excel(file_path='{saved}', filters={{'per_max': 10, 'drawdown_pct_max': -30}})"
+    )
+
+
+@mcp.tool()
+@safe_tool
+async def query_excel(
+    file_path: str,
+    filters: dict | None = None,
+    sort_by: str = "",
+    descending: bool = True,
+    limit: int = 30,
+) -> str:
+    """엑셀쿼리 — 저장된 Excel 스냅샷에서 조건에 맞는 종목을 즉시 필터링.
+
+    scan_to_excel로 만든 파일을 조회할 때 사용. HTTP 호출 없이 로컬 파일에서
+    필터링하므로 매우 빠릅니다. 같은 파일에 여러 조건을 번갈아 쿼리 가능.
+
+    필터 형식 (두 가지 다 지원):
+        간단: {"per_max": 10, "pbr_max": 1.5, "drawdown_pct_max": -30}
+        상세: {"per": {"max": 10, "min": 0}, "drawdown_pct": {"max": -30}}
+
+    Args:
+        file_path: scan_to_excel로 만든 파일 경로
+        filters: 필터 조건 (컬럼명_max / 컬럼명_min 형식)
+        sort_by: 정렬 기준 컬럼 (예: "market_cap", "drawdown_pct")
+        descending: 내림차순 여부 (기본 True)
+        limit: 반환 최대 개수 (기본 30)
+
+    Returns:
+        필터링된 종목 리스트 (마크다운 테이블)
+    """
+    try:
+        df = load_excel(file_path, sheet_name="Snapshot")
+    except FileNotFoundError:
+        return f"파일을 찾을 수 없습니다: {file_path}"
+    except Exception as e:
+        return f"파일 로드 실패: {type(e).__name__}: {e}"
+
+    if filters:
+        df = apply_filters(df, filters)
+
+    if sort_by and sort_by in df.columns:
+        df = df.sort_values(sort_by, ascending=not descending)
+
+    df = df.head(limit)
+
+    if df.empty:
+        return f"조건에 맞는 종목이 없습니다. (원본: {file_path})"
+
+    # 주요 컬럼만 표시
+    display_cols = [
+        c for c in ["code", "name", "current_price", "drawdown_pct", "per", "pbr", "volume"]
+        if c in df.columns
+    ]
+    if display_cols:
+        df_display = df[display_cols]
+    else:
+        df_display = df
+
+    lines = [f"쿼리 결과 ({len(df)}개 종목, 파일: {Path(file_path).name}):", ""]
+    lines.append("| " + " | ".join(df_display.columns) + " |")
+    lines.append("|" + "|".join(["---"] * len(df_display.columns)) + "|")
+    for _, row in df_display.iterrows():
+        values = []
+        for col in df_display.columns:
+            v = row[col]
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                if col in ("current_price", "volume", "avg_volume", "high", "low"):
+                    values.append(f"{int(v):,}")
+                elif col.endswith("_pct"):
+                    values.append(f"{v:+.2f}%")
+                else:
+                    values.append(f"{v:.2f}" if isinstance(v, float) else str(v))
+            else:
+                values.append(str(v))
+        lines.append("| " + " | ".join(values) + " |")
+
     return "\n".join(lines)
 
 
