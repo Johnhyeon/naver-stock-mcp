@@ -9,7 +9,7 @@ import re
 
 from bs4 import BeautifulSoup
 
-from stock_mcp_server._http import get_client
+from stock_mcp_server._http import fetch
 from stock_mcp_server._cache import cached
 
 BASE_URL = "https://finance.naver.com"
@@ -35,8 +35,7 @@ async def search_stock(query: str) -> list[dict]:
     # 메인 사이트 검색 페이지 사용 (ac.finance.naver.com보다 안정적)
     url = f"{BASE_URL}/search/searchList.naver"
     params = {"query": query}
-    client = get_client()
-    resp = await client.get(url, params=params)
+    resp = await fetch(url, params=params)
     soup = BeautifulSoup(resp.text, "lxml")
 
     results = []
@@ -74,8 +73,7 @@ async def get_ohlcv(
         "count": count,
         "requestType": "0",
     }
-    client = get_client()
-    resp = await client.get(FCHART_URL, params=params)
+    resp = await fetch(FCHART_URL, params=params)
     text = resp.text
 
     # 네이버 fchart 응답은 JS 배열 형태 → 파싱
@@ -110,8 +108,7 @@ async def get_ohlcv(
 async def get_current_price(code: str) -> dict:
     """종목의 현재가 정보를 가져옵니다."""
     url = f"{BASE_URL}/item/main.naver?code={code}"
-    client = get_client()
-    resp = await client.get(url)
+    resp = await fetch(url)
     soup = BeautifulSoup(resp.text, "lxml")
 
     result = {"code": code}
@@ -172,10 +169,9 @@ async def get_investor_flow(code: str, days: int = 20) -> list[dict]:
     results = []
     page = 1
 
-    client = get_client()
     while len(results) < days:
         params = {"code": code, "page": page}
-        resp = await client.get(url, params=params)
+        resp = await fetch(url, params=params)
         soup = BeautifulSoup(resp.text, "lxml")
 
         # 두 번째 table.type2가 수급 데이터 (첫 번째는 거래원)
@@ -227,8 +223,7 @@ async def get_investor_flow(code: str, days: int = 20) -> list[dict]:
 async def get_financials(code: str) -> dict:
     """종목의 주요 재무지표를 가져옵니다."""
     url = f"{BASE_URL}/item/main.naver?code={code}"
-    client = get_client()
-    resp = await client.get(url)
+    resp = await fetch(url)
     soup = BeautifulSoup(resp.text, "lxml")
 
     result = {"code": code}
@@ -280,8 +275,7 @@ async def list_themes(page: int = 1) -> list[dict]:
         [{name, theme_id, change_rate, recent_3d_rate, up_count, flat_count, down_count, leaders}]
     """
     url = f"{BASE_URL}/sise/theme.naver"
-    client = get_client()
-    resp = await client.get(url, params={"page": page})
+    resp = await fetch(url, params={"page": page})
     soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_1.theme")
@@ -344,9 +338,8 @@ async def get_theme_stocks(
     # 1) 모든 페이지에서 테마 검색 (부분 일치)
     theme_id = None
     matched_name = None
-    client = get_client()
     for page in range(1, 8):
-        resp = await client.get(
+        resp = await fetch(
             f"{BASE_URL}/sise/theme.naver",
             params={"page": page},
         )
@@ -377,8 +370,7 @@ async def get_theme_stocks(
         return {"theme_name": theme_name, "theme_id": None, "stocks": []}
 
     # 2) 테마 상세 페이지에서 종목 리스트 추출
-    client = get_client()
-    resp = await client.get(
+    resp = await fetch(
         f"{BASE_URL}/sise/sise_group_detail.naver",
         params={"type": "theme", "no": theme_id},
     )
@@ -436,8 +428,7 @@ async def list_sectors() -> list[dict]:
         [{name, sector_id, change_rate, total_count, up_count, flat_count, down_count}]
     """
     url = f"{BASE_URL}/sise/sise_group.naver"
-    client = get_client()
-    resp = await client.get(url, params={"type": "upjong"})
+    resp = await fetch(url, params={"type": "upjong"})
     soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_1")
@@ -495,8 +486,7 @@ async def get_sector_stocks(sector_name: str, count: int = 30) -> dict:
         return {"sector_name": sector_name, "sector_id": None, "stocks": []}
 
     # 2) 업종 상세 페이지에서 종목 리스트 추출
-    client = get_client()
-    resp = await client.get(
+    resp = await fetch(
         f"{BASE_URL}/sise/sise_group_detail.naver",
         params={"type": "upjong", "no": matched["sector_id"]},
     )
@@ -801,8 +791,7 @@ async def _fetch_ranking_page(url: str, sosok: str | None, page: int = 1) -> lis
     params: dict[str, str | int] = {"page": page}
     if sosok is not None:
         params["sosok"] = sosok
-    client = get_client()
-    resp = await client.get(url, params=params)
+    resp = await fetch(url, params=params)
     soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_2")
@@ -919,8 +908,7 @@ async def get_change_ranking(direction: str = "up", market: str = "ALL", count: 
 async def _fetch_market_cap_page(sosok: str, page: int = 1) -> list[dict]:
     """시가총액 페이지 1페이지(50개)를 파싱. cells=13 구조."""
     url = f"{BASE_URL}/sise/sise_market_sum.naver"
-    client = get_client()
-    resp = await client.get(url, params={"sosok": sosok, "page": page})
+    resp = await fetch(url, params={"sosok": sosok, "page": page})
     soup = BeautifulSoup(resp.text, "lxml")
 
     table = soup.select_one("table.type_2")
@@ -986,9 +974,8 @@ async def get_market_index() -> list[dict]:
     url2 = f"{BASE_URL}/sise/sise_index.naver?code=KOSDAQ"
 
     results = []
-    client = get_client()
     for idx_url, name in [(url, "KOSPI"), (url2, "KOSDAQ")]:
-        resp = await client.get(idx_url)
+        resp = await fetch(idx_url)
         soup = BeautifulSoup(resp.text, "lxml")
 
         now_val = soup.select_one("div#now_value")
