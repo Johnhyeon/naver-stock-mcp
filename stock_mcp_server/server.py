@@ -15,6 +15,14 @@ from stock_mcp_server.naver import (
     get_investor_flow,
     get_financials,
     get_market_index,
+    list_themes as naver_list_themes,
+    get_theme_stocks as naver_get_theme_stocks,
+    list_sectors as naver_list_sectors,
+    get_sector_stocks as naver_get_sector_stocks,
+    get_volume_ranking as naver_get_volume_ranking,
+    get_change_ranking as naver_get_change_ranking,
+    get_market_cap_ranking as naver_get_market_cap_ranking,
+    get_multi_stocks as naver_get_multi_stocks,
 )
 
 
@@ -222,6 +230,252 @@ async def get_index() -> str:
     lines = ["시장 지수:"]
     for item in data:
         lines.append(f"  {item['index']}: {item.get('value', '-')} ({item.get('change', '-')})")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def list_themes(page: int = 1) -> str:
+    """테마목록 — 네이버 증권의 테마 목록을 가져옵니다.
+    "어떤 테마가 있어?", "테마 리스트", "오늘 강세 테마" 같은 질문에 사용합니다.
+    총 7페이지가 있으며 한 페이지당 40개 테마가 있습니다. 전일대비 등락률 순으로 정렬되어 있어요.
+
+    Args:
+        page: 페이지 번호 (1~7, 기본 1)
+    """
+    page = max(1, min(page, 7))
+    themes = await naver_list_themes(page=page)
+    if not themes:
+        return f"페이지 {page}의 테마 목록을 가져올 수 없습니다."
+
+    lines = [f"테마 목록 (page {page}, {len(themes)}개):", ""]
+    lines.append("테마명 | 전일대비 | 최근3일 | 상승/보합/하락 | 주도주")
+    lines.append("---|---|---|---|---")
+    for t in themes:
+        leaders = ", ".join(t["leaders"])
+        counts = f"{t['up_count']}/{t['flat_count']}/{t['down_count']}"
+        lines.append(
+            f"{t['name']} | {t['change_rate']} | {t['recent_3d_rate']} | {counts} | {leaders}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def get_theme_stocks(
+    theme_name: str,
+    count: int = 30,
+    include_reason: bool = True,
+) -> str:
+    """테마종목 — 특정 테마에 속한 종목 리스트를 가져옵니다.
+    "반도체 테마 종목", "2차전지 관련주", "AI 테마주" 같은 질문에 사용합니다.
+    테마명 부분 매칭을 지원합니다.
+
+    Args:
+        theme_name: 테마명 (예: "2차전지", "AI", "반도체")
+        count: 반환할 최대 종목 수 (기본 30)
+        include_reason: 편입사유 포함 여부. False로 하면 토큰 대폭 절감.
+                        "왜 이 테마에 들어갔는지" 필요 없으면 False 권장.
+    """
+    count = min(count, 50)
+    result = await naver_get_theme_stocks(
+        theme_name,
+        count=count,
+        include_reason=include_reason,
+    )
+    if not result.get("theme_id"):
+        return (
+            f"'{theme_name}' 테마를 찾을 수 없습니다. "
+            f"list_themes로 전체 테마 목록을 먼저 확인해보세요."
+        )
+
+    stocks = result["stocks"]
+    lines = [f"테마: {result['theme_name']} ({len(stocks)}개 종목)", ""]
+
+    if include_reason:
+        lines.append("코드 | 종목명 | 현재가 | 등락률 | 거래량 | 편입사유")
+        lines.append("---|---|---|---|---|---")
+        for s in stocks:
+            reason = s.get("reason", "")
+            lines.append(
+                f"{s['code']} | {s['name']} | {s['price']:,} | {s['change_rate']} | "
+                f"{s['volume']:,} | {reason}"
+            )
+    else:
+        lines.append("코드 | 종목명 | 현재가 | 등락률 | 거래량")
+        lines.append("---|---|---|---|---")
+        for s in stocks:
+            lines.append(
+                f"{s['code']} | {s['name']} | {s['price']:,} | {s['change_rate']} | {s['volume']:,}"
+            )
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def list_sectors() -> str:
+    """업종목록 — 네이버 증권의 업종(섹터) 목록을 가져옵니다.
+    "업종별 현황", "섹터 리스트", "업종 등락률" 같은 질문에 사용합니다.
+    약 79개 업종이 전일대비 등락률 순으로 정렬됩니다.
+    """
+    sectors = await naver_list_sectors()
+    if not sectors:
+        return "업종 목록을 가져올 수 없습니다."
+
+    lines = [f"업종 목록 ({len(sectors)}개):", ""]
+    lines.append("업종명 | 전일대비 | 종목수 | 상승/보합/하락")
+    lines.append("---|---|---|---")
+    for s in sectors:
+        counts = f"{s['up_count']}/{s['flat_count']}/{s['down_count']}"
+        lines.append(
+            f"{s['name']} | {s['change_rate']} | {s['total_count']} | {counts}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def get_sector_stocks(sector_name: str, count: int = 30) -> str:
+    """업종종목 — 특정 업종에 속한 종목 리스트를 가져옵니다.
+    "통신장비 업종 종목", "반도체 업종", "제약 섹터 종목" 같은 질문에 사용합니다.
+    업종명 부분 매칭을 지원합니다.
+
+    Args:
+        sector_name: 업종명 (예: "통신장비", "반도체", "제약")
+        count: 반환할 최대 종목 수 (기본 30)
+    """
+    count = min(count, 50)
+    result = await naver_get_sector_stocks(sector_name, count=count)
+    if not result.get("sector_id"):
+        return (
+            f"'{sector_name}' 업종을 찾을 수 없습니다. "
+            f"list_sectors로 전체 업종 목록을 먼저 확인해보세요."
+        )
+
+    stocks = result["stocks"]
+    lines = [f"업종: {result['sector_name']} ({len(stocks)}개 종목)", ""]
+    lines.append("코드 | 종목명 | 현재가 | 등락률 | 거래량")
+    lines.append("---|---|---|---|---")
+    for s in stocks:
+        lines.append(
+            f"{s['code']} | {s['name']} | {s['price']:,} | {s['change_rate']} | {s['volume']:,}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def get_volume_ranking(market: str = "ALL", count: int = 50) -> str:
+    """거래량순위 — 거래량 상위 종목을 가져옵니다.
+    "거래량 많은 종목", "거래 활발한 종목", "오늘 가장 많이 거래된 종목" 같은 질문에 사용합니다.
+
+    Args:
+        market: "KOSPI" / "KOSDAQ" / "ALL" (기본 ALL)
+        count: 가져올 종목 수 (기본 50, 최대 100)
+    """
+    count = min(count, 100)
+    ranks = await naver_get_volume_ranking(market=market, count=count)
+    if not ranks:
+        return f"{market} 거래량 순위를 가져올 수 없습니다."
+
+    lines = [f"거래량 상위 ({market}, {len(ranks)}개):", ""]
+    lines.append("순위 | 코드 | 종목명 | 현재가 | 등락률 | 거래량")
+    lines.append("---|---|---|---|---|---")
+    for i, r in enumerate(ranks, 1):
+        lines.append(
+            f"{i} | {r['code']} | {r['name']} | {r['price']:,} | "
+            f"{r['change_rate']} | {r['volume']:,}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def get_change_ranking(
+    direction: str = "up",
+    market: str = "ALL",
+    count: int = 50,
+) -> str:
+    """등락률순위 — 등락률 상위/하위 종목을 가져옵니다.
+    "상한가 종목", "급등주", "급락주", "상승률 상위" 같은 질문에 사용합니다.
+
+    Args:
+        direction: "up"(상승률 상위) / "down"(하락률 상위)
+        market: "KOSPI" / "KOSDAQ" / "ALL" (기본 ALL)
+        count: 가져올 종목 수 (기본 50, 최대 100)
+    """
+    count = min(count, 100)
+    ranks = await naver_get_change_ranking(direction=direction, market=market, count=count)
+    if not ranks:
+        return f"{direction} 등락률 순위를 가져올 수 없습니다."
+
+    dir_label = "상승률 상위" if direction.lower() == "up" else "하락률 상위"
+    lines = [f"{dir_label} ({market}, {len(ranks)}개):", ""]
+    lines.append("순위 | 코드 | 종목명 | 현재가 | 등락률 | 거래량")
+    lines.append("---|---|---|---|---|---")
+    for i, r in enumerate(ranks, 1):
+        lines.append(
+            f"{i} | {r['code']} | {r['name']} | {r['price']:,} | "
+            f"{r['change_rate']} | {r['volume']:,}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def get_market_cap_ranking(market: str = "KOSPI", count: int = 50) -> str:
+    """시가총액순위 — 시가총액 상위 종목을 가져옵니다.
+    "대형주", "시가총액 TOP", "코스피 대장주" 같은 질문에 사용합니다.
+
+    Args:
+        market: "KOSPI" / "KOSDAQ" (기본 KOSPI, ALL 미지원)
+        count: 가져올 종목 수 (기본 50, 최대 100)
+    """
+    count = min(count, 100)
+    ranks = await naver_get_market_cap_ranking(market=market, count=count)
+    if not ranks:
+        return f"{market} 시가총액 순위를 가져올 수 없습니다."
+
+    lines = [f"시가총액 상위 ({market}, {len(ranks)}개):", ""]
+    lines.append("순위 | 코드 | 종목명 | 현재가 | 등락률 | 시가총액(억원)")
+    lines.append("---|---|---|---|---|---")
+    for r in ranks:
+        lines.append(
+            f"{r['rank']} | {r['code']} | {r['name']} | {r['price']:,} | "
+            f"{r['change_rate']} | {r['market_cap_billion']:,}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+async def get_multi_stocks(codes: list[str]) -> str:
+    """벌크조회 — 여러 종목의 기본 정보(가격/등락률/거래량)를 한 번에 가져옵니다.
+    "이 종목들 현재가 보여줘", "리스트 종목 시세 한번에" 같은 질문에 사용합니다.
+    개별 get_price를 여러 번 호출하는 것보다 훨씬 토큰 효율적입니다.
+    스크리닝 결과 N개 종목을 비교 분석할 때 필수 도구.
+
+    Args:
+        codes: 종목코드 리스트 (최대 30개, 예: ["005930", "000660", "005380"])
+    """
+    if not codes:
+        return "종목코드 리스트가 비어 있습니다."
+
+    stocks = await naver_get_multi_stocks(codes)
+    if not stocks:
+        return "종목 정보를 가져올 수 없습니다."
+
+    lines = [f"종목 정보 ({len(stocks)}개):", ""]
+    lines.append("코드 | 종목명 | 현재가 | 전일대비 | 등락률 | 거래량")
+    lines.append("---|---|---|---|---|---")
+    for s in stocks:
+        change = s["change"]
+        change_str = f"{change:+,}" if change != 0 else "0"
+        lines.append(
+            f"{s['code']} | {s['name']} | {s['price']:,} | "
+            f"{change_str} | {s['change_rate']} | {s['volume']:,}"
+        )
     return "\n".join(lines)
 
 

@@ -46,7 +46,7 @@ async def search_stock(query: str) -> list[dict]:
         href = link.get("href", "")
         name = link.text.strip()
         # /item/main.naver?code=005930 형태에서 코드 추출
-        code_match = re.search(r"code=(\d{6})", href)
+        code_match = re.search(r"code=([A-Za-z0-9]{6})", href)
         if code_match and name:
             results.append({
                 "code": code_match.group(1),
@@ -134,22 +134,25 @@ async def get_current_price(code: str) -> dict:
             diff_text = "-" + diff_text
         result["change"] = int(diff_text)
 
-    # 거래량
-    table = soup.select("table.no_info tr")
-    for tr in table:
-        th = tr.select_one("th")
-        td = tr.select_one("td span.blind")
-        if th and td:
-            label = th.text.strip()
-            value = td.text.replace(",", "").strip()
-            if "거래량" in label:
-                result["volume"] = int(value)
-            elif "시가" in label:
-                result["open"] = int(value)
-            elif "고가" in label:
-                result["high"] = int(value)
-            elif "저가" in label:
-                result["low"] = int(value)
+    # 시세 정보 (전일/고가/저가/시가/거래량/거래대금)
+    # 네이버 no_info 테이블 구조: td마다 span.sptxt(라벨) + em > span.blind(값)
+    for td in soup.select("table.no_info td"):
+        label_tag = td.select_one("span.sptxt")
+        value_tag = td.select_one("em > span.blind")
+        if not label_tag or not value_tag:
+            continue
+
+        label = label_tag.text.strip()
+        value = _parse_int(value_tag.text)
+
+        if "거래량" in label:
+            result["volume"] = value
+        elif "시가" in label:
+            result["open"] = value
+        elif "고가" in label and "상한" not in label:
+            result["high"] = value
+        elif "저가" in label and "하한" not in label:
+            result["low"] = value
 
     return result
 
@@ -258,6 +261,482 @@ async def get_financials(code: str) -> dict:
                 result[label] = value
 
     return result
+
+
+async def list_themes(page: int = 1) -> list[dict]:
+    """네이버 증권 테마 목록을 가져옵니다.
+
+    한 페이지에 40개 테마, 총 7페이지 존재 (약 280개).
+
+    Args:
+        page: 페이지 번호 (1~7)
+
+    Returns:
+        [{name, theme_id, change_rate, recent_3d_rate, up_count, flat_count, down_count, leaders}]
+    """
+    url = f"{BASE_URL}/sise/theme.naver"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(url, params={"page": page}, headers=HEADERS)
+        soup = BeautifulSoup(resp.text, "lxml")
+
+    table = soup.select_one("table.type_1.theme")
+    if not table:
+        return []
+
+    results = []
+    for row in table.select("tr"):
+        cells = row.select("td")
+        if len(cells) != 8:
+            continue
+
+        name_tag = cells[0].find("a")
+        if not name_tag:
+            continue
+
+        href = name_tag.get("href", "")
+        theme_id_match = re.search(r"no=(\d+)", href)
+        if not theme_id_match:
+            continue
+
+        leaders = []
+        for leader_cell in cells[6:8]:
+            leader_a = leader_cell.find("a")
+            if leader_a:
+                leaders.append(leader_a.text.strip())
+
+        results.append({
+            "name": name_tag.text.strip(),
+            "theme_id": theme_id_match.group(1),
+            "change_rate": cells[1].text.strip(),
+            "recent_3d_rate": cells[2].text.strip(),
+            "up_count": _parse_int(cells[3].text),
+            "flat_count": _parse_int(cells[4].text),
+            "down_count": _parse_int(cells[5].text),
+            "leaders": leaders,
+        })
+
+    return results
+
+
+async def get_theme_stocks(
+    theme_name: str,
+    count: int = 30,
+    include_reason: bool = True,
+) -> dict:
+    """특정 테마의 종목 리스트를 가져옵니다.
+
+    테마명으로 먼저 검색해서 theme_id를 찾은 뒤, 상세 페이지에서 종목 추출.
+
+    Args:
+        theme_name: 테마명 (예: "선박", "AI반도체") - 부분 일치
+        count: 반환할 최대 종목 수 (기본 30)
+        include_reason: 편입사유 포함 여부 (False면 토큰 대폭 절감)
+
+    Returns:
+        {theme_name, theme_id, stocks: [{code, name, price, change_rate, volume, reason}]}
+    """
+    # 1) 모든 페이지에서 테마 검색 (부분 일치)
+    theme_id = None
+    matched_name = None
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        for page in range(1, 8):
+            resp = await client.get(
+                f"{BASE_URL}/sise/theme.naver",
+                params={"page": page},
+                headers=HEADERS,
+            )
+            soup = BeautifulSoup(resp.text, "lxml")
+            table = soup.select_one("table.type_1.theme")
+            if not table:
+                continue
+
+            for row in table.select("tr"):
+                cells = row.select("td")
+                if len(cells) != 8:
+                    continue
+                name_tag = cells[0].find("a")
+                if not name_tag:
+                    continue
+                name = name_tag.text.strip()
+                if theme_name in name or name_tag.text.strip().lower() == theme_name.lower():
+                    href = name_tag.get("href", "")
+                    m = re.search(r"no=(\d+)", href)
+                    if m:
+                        theme_id = m.group(1)
+                        matched_name = name
+                        break
+            if theme_id:
+                break
+
+    if not theme_id:
+        return {"theme_name": theme_name, "theme_id": None, "stocks": []}
+
+    # 2) 테마 상세 페이지에서 종목 리스트 추출
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(
+            f"{BASE_URL}/sise/sise_group_detail.naver",
+            params={"type": "theme", "no": theme_id},
+            headers=HEADERS,
+        )
+        soup = BeautifulSoup(resp.text, "lxml")
+
+    # table.type_5가 종목 리스트
+    tables = soup.select("table.type_5")
+    stocks = []
+    if tables:
+        for row in tables[0].select("tr"):
+            cells = row.select("td")
+            if len(cells) < 11:
+                continue
+
+            name_a = cells[0].find("a")
+            if not name_a:
+                continue
+            code_match = re.search(r"code=([A-Za-z0-9]{6})", name_a.get("href", ""))
+            if not code_match:
+                continue
+
+            stock_info = {
+                "code": code_match.group(1),
+                "name": name_a.text.strip().rstrip("*").strip(),
+                "price": _parse_int(cells[2].text),
+                "change_rate": cells[4].text.strip(),
+                "volume": _parse_int(cells[7].text),
+            }
+
+            if include_reason:
+                reason_tag = cells[1].select_one("p.info_txt")
+                reason = reason_tag.text.strip() if reason_tag else ""
+                if len(reason) > 80:
+                    reason = reason[:78] + ".."
+                stock_info["reason"] = reason
+
+            stocks.append(stock_info)
+            if len(stocks) >= count:
+                break
+
+    return {
+        "theme_name": matched_name,
+        "theme_id": theme_id,
+        "stocks": stocks,
+    }
+
+
+async def list_sectors() -> list[dict]:
+    """네이버 증권 업종(섹터) 목록을 가져옵니다.
+
+    업종은 1페이지에 모두 존재 (약 79개).
+
+    Returns:
+        [{name, sector_id, change_rate, total_count, up_count, flat_count, down_count}]
+    """
+    url = f"{BASE_URL}/sise/sise_group.naver"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(url, params={"type": "upjong"}, headers=HEADERS)
+        soup = BeautifulSoup(resp.text, "lxml")
+
+    table = soup.select_one("table.type_1")
+    if not table:
+        return []
+
+    results = []
+    for row in table.select("tr"):
+        cells = row.select("td")
+        if len(cells) < 6:
+            continue
+
+        name_tag = cells[0].find("a")
+        if not name_tag:
+            continue
+
+        href = name_tag.get("href", "")
+        sector_id_match = re.search(r"no=(\d+)", href)
+        if not sector_id_match:
+            continue
+
+        results.append({
+            "name": name_tag.text.strip(),
+            "sector_id": sector_id_match.group(1),
+            "change_rate": cells[1].text.strip(),
+            "total_count": _parse_int(cells[2].text),
+            "up_count": _parse_int(cells[3].text),
+            "flat_count": _parse_int(cells[4].text),
+            "down_count": _parse_int(cells[5].text),
+        })
+
+    return results
+
+
+async def get_sector_stocks(sector_name: str, count: int = 30) -> dict:
+    """특정 업종의 종목 리스트를 가져옵니다.
+
+    Args:
+        sector_name: 업종명 (예: "통신장비", "반도체") - 부분 일치
+        count: 반환할 최대 종목 수 (기본 30)
+
+    Returns:
+        {sector_name, sector_id, stocks: [{code, name, price, change_rate, volume}]}
+    """
+    # 1) 업종 검색
+    sectors = await list_sectors()
+    matched = None
+    for s in sectors:
+        if sector_name in s["name"] or s["name"].lower() == sector_name.lower():
+            matched = s
+            break
+
+    if not matched:
+        return {"sector_name": sector_name, "sector_id": None, "stocks": []}
+
+    # 2) 업종 상세 페이지에서 종목 리스트 추출
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(
+            f"{BASE_URL}/sise/sise_group_detail.naver",
+            params={"type": "upjong", "no": matched["sector_id"]},
+            headers=HEADERS,
+        )
+        soup = BeautifulSoup(resp.text, "lxml")
+
+    tables = soup.select("table.type_5")
+    stocks = []
+    if tables:
+        for row in tables[0].select("tr"):
+            cells = row.select("td")
+            # 업종 상세는 10 cells (테마와 달리 편입사유 없음)
+            if len(cells) < 10:
+                continue
+
+            name_a = cells[0].find("a")
+            if not name_a:
+                continue
+            code_match = re.search(r"code=([A-Za-z0-9]{6})", name_a.get("href", ""))
+            if not code_match:
+                continue
+
+            stocks.append({
+                "code": code_match.group(1),
+                "name": name_a.text.strip().rstrip("*").strip(),
+                "price": _parse_int(cells[1].text),
+                "change_rate": cells[3].text.strip(),
+                "volume": _parse_int(cells[6].text),
+            })
+            if len(stocks) >= count:
+                break
+
+    return {
+        "sector_name": matched["name"],
+        "sector_id": matched["sector_id"],
+        "stocks": stocks,
+    }
+
+
+async def get_multi_stocks(codes: list[str]) -> list[dict]:
+    """여러 종목의 기본 정보를 한 번에 병렬로 가져옵니다.
+
+    Claude가 스크리닝 결과로 받은 N개 종목을 각각 get_price로 호출하는 것보다
+    훨씬 토큰 효율적입니다. 개별 호출 시마다 MCP 도구 호출 오버헤드가 크거든요.
+
+    Args:
+        codes: 종목코드 리스트 (최대 30개)
+
+    Returns:
+        [{code, name, price, change, change_rate, volume}] 형태의 리스트
+    """
+    import asyncio
+
+    # 최대 30개 제한 (네이버 rate limit 및 응답 크기 제어)
+    codes = codes[:30]
+
+    async def fetch_one(code: str) -> dict | None:
+        try:
+            data = await get_current_price(code)
+            if not data or "price" not in data:
+                return None
+
+            # 등락률 계산 (close 대비 change)
+            price = data["price"]
+            change = data.get("change", 0)
+            prev_close = price - change if change else price
+            if prev_close > 0:
+                change_rate = f"{change / prev_close * 100:+.2f}%"
+            else:
+                change_rate = "0.00%"
+
+            return {
+                "code": code,
+                "name": data.get("name", ""),
+                "price": price,
+                "change": change,
+                "change_rate": change_rate,
+                "volume": data.get("volume", 0),
+            }
+        except Exception:
+            return None
+
+    results = await asyncio.gather(*[fetch_one(code) for code in codes])
+    return [r for r in results if r is not None]
+
+
+def _market_to_sosok(market: str) -> str | None:
+    """시장 파라미터를 네이버 sosok 값으로 변환. None이면 전체."""
+    m = market.upper()
+    if m == "KOSPI":
+        return "0"
+    if m == "KOSDAQ":
+        return "1"
+    return None
+
+
+async def _fetch_ranking_page(url: str, sosok: str | None) -> list[dict]:
+    """네이버 랭킹 페이지 HTML을 파싱해서 종목 리스트 반환.
+
+    거래량/상승률/하락률 페이지 공통 구조 (12 cells).
+    """
+    params = {"sosok": sosok} if sosok is not None else {}
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(url, params=params, headers=HEADERS)
+        soup = BeautifulSoup(resp.text, "lxml")
+
+    table = soup.select_one("table.type_2")
+    if not table:
+        return []
+
+    results = []
+    for row in table.select("tr"):
+        cells = row.select("td")
+        if len(cells) < 12:
+            continue
+
+        # 순위 숫자 확인 (헤더/광고 행 걸러냄)
+        rank_text = cells[0].text.strip()
+        if not rank_text.isdigit():
+            continue
+
+        name_a = cells[1].find("a")
+        if not name_a:
+            continue
+        code_match = re.search(r"code=([A-Za-z0-9]{6})", name_a.get("href", ""))
+        if not code_match:
+            continue
+
+        results.append({
+            "rank": int(rank_text),
+            "code": code_match.group(1),
+            "name": name_a.text.strip(),
+            "price": _parse_int(cells[2].text),
+            "change_rate": cells[4].text.strip(),
+            "volume": _parse_int(cells[5].text),
+        })
+
+    return results
+
+
+async def get_volume_ranking(market: str = "ALL", count: int = 50) -> list[dict]:
+    """거래량 상위 종목을 가져옵니다.
+
+    Args:
+        market: "KOSPI" / "KOSDAQ" / "ALL" (기본 ALL = KOSPI+KOSDAQ 합산)
+        count: 최대 반환 개수 (기본 50, 최대 100)
+    """
+    count = min(count, 100)
+    url = f"{BASE_URL}/sise/sise_quant.naver"
+
+    if market.upper() == "ALL":
+        kospi = await _fetch_ranking_page(url, "0")
+        kosdaq = await _fetch_ranking_page(url, "1")
+        # 거래량 기준 내림차순 병합
+        merged = sorted(kospi + kosdaq, key=lambda x: x["volume"], reverse=True)
+        return merged[:count]
+    else:
+        sosok = _market_to_sosok(market)
+        results = await _fetch_ranking_page(url, sosok)
+        return results[:count]
+
+
+async def get_change_ranking(direction: str = "up", market: str = "ALL", count: int = 50) -> list[dict]:
+    """등락률 상위/하위 종목을 가져옵니다.
+
+    Args:
+        direction: "up"(상승률) / "down"(하락률)
+        market: "KOSPI" / "KOSDAQ" / "ALL"
+        count: 최대 반환 개수 (기본 50, 최대 100)
+    """
+    count = min(count, 100)
+    page = "sise_rise.naver" if direction.lower() == "up" else "sise_fall.naver"
+    url = f"{BASE_URL}/sise/{page}"
+
+    if market.upper() == "ALL":
+        kospi = await _fetch_ranking_page(url, "0")
+        kosdaq = await _fetch_ranking_page(url, "1")
+        # 등락률 기준 정렬 — 문자열이라 _parse_int로 숫자 추출 불가, 그냥 순위 유지
+        merged = kospi + kosdaq
+        # 등락률 숫자 추출해서 정렬
+        def parse_rate(s: str) -> float:
+            try:
+                return float(s.replace("%", "").replace("+", ""))
+            except ValueError:
+                return 0.0
+        reverse = direction.lower() == "up"
+        merged.sort(key=lambda x: parse_rate(x["change_rate"]), reverse=reverse)
+        return merged[:count]
+    else:
+        sosok = _market_to_sosok(market)
+        results = await _fetch_ranking_page(url, sosok)
+        return results[:count]
+
+
+async def get_market_cap_ranking(market: str = "KOSPI", count: int = 50) -> list[dict]:
+    """시가총액 상위 종목을 가져옵니다.
+
+    시가총액 페이지는 cells 수(13)가 다르고 시가총액 컬럼이 [6]에 있음.
+
+    Args:
+        market: "KOSPI" / "KOSDAQ" (ALL 미지원 — 시장별 조회만)
+        count: 최대 반환 개수 (기본 50, 최대 100)
+    """
+    count = min(count, 100)
+    sosok = _market_to_sosok(market)
+    if sosok is None:
+        # ALL이면 일단 KOSPI 기본값
+        sosok = "0"
+
+    url = f"{BASE_URL}/sise/sise_market_sum.naver"
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        resp = await client.get(url, params={"sosok": sosok}, headers=HEADERS)
+        soup = BeautifulSoup(resp.text, "lxml")
+
+    table = soup.select_one("table.type_2")
+    if not table:
+        return []
+
+    results = []
+    for row in table.select("tr"):
+        cells = row.select("td")
+        if len(cells) < 13:
+            continue
+
+        rank_text = cells[0].text.strip()
+        if not rank_text.isdigit():
+            continue
+
+        name_a = cells[1].find("a")
+        if not name_a:
+            continue
+        code_match = re.search(r"code=([A-Za-z0-9]{6})", name_a.get("href", ""))
+        if not code_match:
+            continue
+
+        results.append({
+            "rank": int(rank_text),
+            "code": code_match.group(1),
+            "name": name_a.text.strip(),
+            "price": _parse_int(cells[2].text),
+            "change_rate": cells[4].text.strip(),
+            "market_cap_billion": _parse_int(cells[6].text),  # 단위: 억원
+            "volume": _parse_int(cells[9].text),
+        })
+
+    return results[:count]
 
 
 async def get_market_index() -> list[dict]:

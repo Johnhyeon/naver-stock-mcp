@@ -41,3 +41,4 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+test_v2.py
