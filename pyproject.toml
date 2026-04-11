@@ -1,6 +1,6 @@
 [project]
 name = "naver-stock-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "네이버 증권 데이터를 Claude에서 바로 조회할 수 있는 MCP 서버 - 한국 주식 차트, 수급, 재무지표를 자연어로 분석"
 readme = "README.md"
 license = { text = "MIT" }

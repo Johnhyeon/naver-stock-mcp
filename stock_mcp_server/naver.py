@@ -155,7 +155,13 @@ async def get_current_price(code: str) -> dict:
 
 
 async def get_investor_flow(code: str, days: int = 20) -> list[dict]:
-    """투자자별 매매동향 (외국인/기관/개인 순매수)을 가져옵니다."""
+    """투자자별 매매동향 (기관/외국인 순매매)을 가져옵니다.
+
+    네이버 증권 frgn.naver 페이지 기준:
+    - 두 번째 table.type2가 수급 데이터 테이블
+    - 컬럼 순서: 날짜 | 종가 | 전일비 | 등락률 | 거래량 | 기관 순매매 | 외국인 순매매 | 보유주수 | 지분율
+    - 개인 순매매 컬럼은 이 페이지에 없음
+    """
     url = f"{BASE_URL}/item/frgn.naver"
     results = []
     page = 1
@@ -166,32 +172,41 @@ async def get_investor_flow(code: str, days: int = 20) -> list[dict]:
             resp = await client.get(url, params=params, headers=HEADERS)
             soup = BeautifulSoup(resp.text, "lxml")
 
-            table = soup.select_one("table.type2")
-            if not table:
+            # 두 번째 table.type2가 수급 데이터 (첫 번째는 거래원)
+            tables = soup.select("table.type2")
+            if len(tables) < 2:
                 break
 
+            table = tables[1]
             rows = table.select("tr")
+            found_in_page = 0
             for row in rows:
-                cols = row.select("td span.tah")
-                if len(cols) >= 6:
-                    try:
-                        date_tag = row.select_one("td span.tah.p10")
-                        if not date_tag:
-                            continue
-                        date = date_tag.text.strip()
+                cols = row.select("td")
+                # 수급 데이터 행은 정확히 9개 td를 가짐
+                if len(cols) != 9:
+                    continue
 
-                        result = {
-                            "date": date,
-                            "close": _parse_int(cols[0].text),
-                            "change": _parse_int(cols[1].text),
-                            "volume": _parse_int(cols[2].text),
-                            "institutional": _parse_int(cols[3].text),
-                            "foreign": _parse_int(cols[4].text),
-                            "individual": _parse_int(cols[5].text) if len(cols) > 5 else 0,
-                        }
-                        results.append(result)
-                    except (ValueError, IndexError):
-                        continue
+                date_text = cols[0].text.strip()
+                # 날짜 형식(YYYY.MM.DD) 체크 — 헤더/빈 행 필터링
+                if not date_text or "." not in date_text:
+                    continue
+
+                try:
+                    result = {
+                        "date": date_text,
+                        "close": _parse_int(cols[1].text),
+                        "change": _parse_int(cols[2].text.split()[-1] if cols[2].text.strip() else "0"),
+                        "volume": _parse_int(cols[4].text),
+                        "institutional": _parse_int(cols[5].text),
+                        "foreign": _parse_int(cols[6].text),
+                    }
+                    results.append(result)
+                    found_in_page += 1
+                except (ValueError, IndexError):
+                    continue
+
+            if found_in_page == 0:
+                break  # 더 이상 데이터 없음
 
             if len(results) >= days:
                 break

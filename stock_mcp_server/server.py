@@ -168,20 +168,19 @@ async def get_flow(code: str, days: int = 20) -> str:
         return f"종목코드 {code}의 수급 데이터를 가져올 수 없습니다."
 
     lines = [f"종목 {code} 투자자별 매매동향 ({len(data)}일):", ""]
-    lines.append("날짜 | 종가 | 기관 순매수 | 외국인 순매수 | 개인 순매수")
+    lines.append("날짜 | 종가 | 거래량 | 기관 순매매 | 외국인 순매매")
     lines.append("---|---|---|---|---")
     for row in data:
         lines.append(
-            f"{row['date']} | {row['close']:,} | {row['institutional']:,} | "
-            f"{row['foreign']:,} | {row['individual']:,}"
+            f"{row['date']} | {row['close']:,} | {row['volume']:,} | "
+            f"{row['institutional']:,} | {row['foreign']:,}"
         )
 
     # 합계
     total_inst = sum(r["institutional"] for r in data)
     total_frgn = sum(r["foreign"] for r in data)
-    total_indv = sum(r["individual"] for r in data)
     lines.append("")
-    lines.append(f"합계 | - | {total_inst:,} | {total_frgn:,} | {total_indv:,}")
+    lines.append(f"합계 | - | - | {total_inst:,} | {total_frgn:,}")
 
     return "\n".join(lines)
 
