@@ -35,7 +35,6 @@ from stock_mcp_server._excel import (
     load_excel,
     apply_filters,
 )
-from stock_mcp_server._chart_html import render_chart_html
 from stock_mcp_server._metrics import (
     track_metrics,
     load_metrics,
@@ -74,42 +73,7 @@ mcp = FastMCP(
 
 ## 차트 시각화 규칙
 
-### ⚠️ 필수: 차트는 `create_chart_file` 도구를 사용할 것
-
-**Claude가 직접 HTML/SVG/Canvas 코드를 작성하지 말 것.**
-차트가 필요한 상황이라면 `create_chart_file(code, timeframe, count)` 도구를 호출해라.
-
-이유:
-- 서버 사이드에서 일관된 스타일로 렌더링됨
-- 캔들 간격, 색상, 레이아웃, MA 라인, 거래량 패널, 툴팁 전부 표준화
-- 속도 30초 → 즉시 (토큰 생성 없음)
-- 텍스트 잘림, 이질감 같은 시각적 버그 없음
-
-**올바른 사용:**
-```
-사용자: "삼성전자 차트 보여줘"
-Claude: create_chart_file(code="005930") 호출 → 끝. 추가 작업 없음.
-        브라우저가 자동으로 열리므로 사용자에게 "차트를 열었습니다" 안내만 하면 됨.
-        get_chart를 추가 호출하거나 HTML/SVG를 직접 작성하면 안 됨.
-```
-
-**잘못된 사용 (전부 금지):**
-```
-❌ create_chart_file 호출 후 get_chart를 또 호출
-❌ create_chart_file 호출 후 HTML/SVG/Canvas 코드 작성
-❌ get_chart 데이터로 차트 렌더링 (시각화 요청 시)
-❌ <!DOCTYPE html>... 를 직접 작성
-```
-
-**핵심: create_chart_file은 브라우저에서 자동으로 차트를 보여줌.
-따라서 채팅 안에서 추가로 차트를 만들 필요가 전혀 없음.**
-
-### 차트 이외의 시각화가 필요한 경우 (예: 여러 종목 비교 대시보드)
-
-`create_chart_file`로 커버 안 되는 특수 요청일 때만 직접 렌더링.
-그 경우에도 아래 규칙을 반드시 따를 것.
-
-### 기본 기간 (매우 중요)
+### 기본 기간
 - **차트는 반드시 120일 이상 불러와서 그린다.** 60일 같은 짧은 기간으로 호출하지 말 것.
 - `get_chart` 호출 시 `count` 파라미터를 명시적으로 120 이상으로 설정할 것.
 - 사용자가 "3개월" 같이 짧은 기간을 요청해도 최소 120일 데이터는 불러와야 기술적 분석이 의미 있음.
@@ -248,15 +212,8 @@ async def search(query: str) -> str:
 @safe_tool
 @track_metrics("get_chart")
 async def get_chart(code: str, timeframe: str = "day", count: int = 120) -> str:
-    """차트데이터 — 종목의 OHLCV 원시 데이터(텍스트 테이블)를 가져옵니다.
-
-    ⚠️ 차트를 "보여줘/그려줘" 요청에는 이 도구 대신 create_chart_file을 사용할 것.
-    이 도구는 이동평균 계산, 수치 비교 등 텍스트 기반 분석이 필요할 때만 사용.
-
-    올바른 사용:
-    - "삼성전자 20일 이동평균 계산해줘" → get_chart (데이터 필요)
-    - "삼성전자 차트 보여줘/그려줘" → create_chart_file (시각화)
-
+    """차트데이터 — 종목의 OHLCV(시가/고가/저가/종가/거래량) 차트 데이터를 가져옵니다.
+    "삼성전자 일봉", "차트 보여줘", "3개월 주봉", "월봉 데이터" 같은 질문에 사용합니다.
     **기본값 120일 (약 6개월 거래일)**.
 
     Args:
@@ -897,100 +854,6 @@ async def query_excel(
         lines.append("| " + " | ".join(values) + " |")
 
     return "\n".join(lines)
-
-
-@mcp.tool()
-@safe_tool
-@track_metrics("create_chart_file")
-async def create_chart_file(
-    code: str,
-    timeframe: str = "day",
-    count: int = 120,
-    title: str = "",
-) -> str:
-    """차트파일생성 — 완성된 캔들차트 HTML 파일을 즉시 생성합니다.
-
-    ⭐ 차트 시각화의 표준 방법. Claude가 직접 HTML을 만들지 말고 이 도구를 사용할 것.
-
-    특징:
-    - 서버 사이드 렌더링 (Claude가 HTML 코드 생성 안 함 → 매우 빠름)
-    - 일관된 스타일 (캔들 간격, 색상, 레이아웃 전부 표준화)
-    - SVG 기반 (선명, 반응형, 오프라인 OK)
-    - MA5/20/60 이동평균선 + 거래량 패널 자동 포함
-    - 마우스 오버 툴팁 (OHLCV 정보)
-    - 고점/저점 마커
-    - 라이트/다크 모드 자동 감지
-    - 한국식 양봉(빨강)/음봉(파랑)
-
-    Args:
-        code: 종목코드 6자리 (예: "005930")
-        timeframe: "day"(일봉), "week"(주봉), "month"(월봉)
-        count: 봉 개수 (기본 120, 최대 500)
-        title: 차트 제목 (비우면 자동 생성)
-
-    Returns:
-        저장된 HTML 파일 경로 + 요약 정보
-    """
-    count = min(max(count, 20), 500)
-
-    # 1) OHLCV 수집
-    ohlcv = await get_ohlcv(code, timeframe, count)
-    if not ohlcv:
-        return f"차트 데이터를 가져올 수 없습니다: {code}"
-
-    # 2) 종목명 조회 (current_price에서)
-    price_info = await get_current_price(code)
-    name = price_info.get("name", code) if price_info else code
-
-    # 3) HTML 생성
-    try:
-        html = render_chart_html(
-            code=code,
-            name=name,
-            ohlcv=ohlcv,
-            timeframe=timeframe,
-            title=title,
-        )
-    except Exception as e:
-        return f"차트 HTML 생성 실패: {type(e).__name__}: {e}"
-
-    # 4) 파일 저장
-    filename = generate_filename(f"chart_{code}", ext="html")
-    file_path = get_snapshot_dir() / filename
-    file_path.write_text(html, encoding="utf-8")
-
-    # 5) 브라우저에서 자동 열기
-    import subprocess
-    import sys as _sys
-    try:
-        abs_path = str(file_path.resolve())
-        if _sys.platform == "win32":
-            import os
-            os.startfile(abs_path)
-        elif _sys.platform == "darwin":
-            subprocess.Popen(["open", abs_path])
-        else:
-            subprocess.Popen(["xdg-open", abs_path])
-    except Exception:
-        pass  # 열기 실패해도 파일은 이미 저장됨
-
-    # 6) 요약 반환
-    first_date = ohlcv[0]["date"]
-    last_date = ohlcv[-1]["date"]
-    current = ohlcv[-1]["close"]
-    high = max(r["high"] for r in ohlcv)
-    low = min(r["low"] for r in ohlcv)
-
-    return (
-        f"✓ 차트를 브라우저에서 열었습니다.\n"
-        f"종목: {name} ({code})\n"
-        f"기간: {first_date[:8]} ~ {last_date[:8]} ({len(ohlcv)}봉)\n"
-        f"현재가: {current:,}원\n"
-        f"최고가: {high:,} / 최저가: {low:,}\n"
-        f"파일: {file_path.resolve()}\n\n"
-        f"이 도구가 차트를 이미 보여줬으므로, "
-        f"추가로 HTML이나 SVG 코드를 작성할 필요가 없습니다."
-    )
 
 
 @mcp.tool()
