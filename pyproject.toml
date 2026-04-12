@@ -1,13 +1,13 @@
 [project]
-name = "naver-stock-mcp"
-version = "0.1.2"
-description = "네이버 증권 데이터를 Claude에서 바로 조회할 수 있는 MCP 서버 - 한국 주식 차트, 수급, 재무지표를 자연어로 분석"
+name = "stocklens-mcp"
+version = "0.2.0"
+description = "StockLens — AI가 진짜 데이터로 분석합니다. 네이버 증권 기반 한국 주식 MCP 서버 (차트, 수급, 재무, 스크리닝, Excel)"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name = "Johnhyeon" }
 ]
-keywords = ["mcp", "claude", "stock", "naver", "korea", "finance", "investment", "ai"]
+keywords = ["mcp", "claude", "stock", "stocklens", "naver", "korea", "finance", "investment", "ai"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -31,11 +31,15 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Johnhyeon/naver-stock-mcp"
-Repository = "https://github.com/Johnhyeon/naver-stock-mcp"
-Issues = "https://github.com/Johnhyeon/naver-stock-mcp/issues"
+Homepage = "https://github.com/Johnhyeon/stocklens-mcp"
+Repository = "https://github.com/Johnhyeon/stocklens-mcp"
+Issues = "https://github.com/Johnhyeon/stocklens-mcp/issues"
 
 [project.scripts]
+# 새 커맨드 (v0.2.0+)
+stocklens = "stock_mcp_server.server:main"
+stocklens-setup = "stock_mcp_server.setup_claude:main"
+# 하위 호환 (기존 naver-stock-mcp 사용자)
 stock-mcp-server = "stock_mcp_server.server:main"
 stock-mcp-setup = "stock_mcp_server.setup_claude:main"
 

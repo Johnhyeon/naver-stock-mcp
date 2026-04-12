@@ -1,5 +1,5 @@
 #!/bin/bash
-# naver-stock-mcp 자동 설치 (macOS / Linux)
+# StockLens Installer (macOS / Linux)
 
 set -e
 
@@ -9,7 +9,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo "=============================================="
-echo "  naver-stock-mcp 자동 설치"
+echo "  StockLens Installer"
 echo "=============================================="
 echo ""
 
@@ -20,69 +20,63 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
 else
     OS="Unknown"
 fi
-echo "  감지된 OS: $OS"
+echo "  Detected OS: $OS"
 echo ""
 
-# [1/3] Python 설치 확인
-echo "[1/3] Python 설치 확인..."
+# [1/3] Python
+echo "[1/3] Checking Python..."
 if command -v python3 &> /dev/null; then
     PYTHON_CMD="python3"
 elif command -v python &> /dev/null; then
     PYTHON_CMD="python"
 else
-    echo -e "      ${RED}✗ Python이 설치되어 있지 않습니다.${NC}"
+    echo -e "      ${RED}✗ Python not installed.${NC}"
     echo ""
-    echo "      먼저 Python 3.11 이상을 설치해주세요:"
+    echo "      Install Python 3.11+ first:"
     if [[ "$OS" == "macOS" ]]; then
         echo "        brew install python"
-        echo "        또는 https://www.python.org/downloads/"
     else
-        echo "        sudo apt install python3 python3-pip  (Ubuntu/Debian)"
-        echo "        sudo dnf install python3 python3-pip  (Fedora)"
+        echo "        sudo apt install python3 python3-pip"
     fi
     exit 1
 fi
 
 PYVER=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
-echo -e "      ${GREEN}✓ Python $PYVER 감지됨${NC}"
+echo -e "      ${GREEN}✓ Python $PYVER found${NC}"
 
 PYMAJOR=$(echo $PYVER | cut -d. -f1)
 PYMINOR=$(echo $PYVER | cut -d. -f2)
 if [ "$PYMAJOR" -lt 3 ] || ([ "$PYMAJOR" -eq 3 ] && [ "$PYMINOR" -lt 11 ]); then
-    echo -e "      ${YELLOW}⚠ Python 3.11 이상이 필요합니다 (현재: $PYVER)${NC}"
+    echo -e "      ${YELLOW}⚠ Python 3.11+ required (current: $PYVER)${NC}"
     exit 1
 fi
 echo ""
 
-# [2/3] PyPI에서 설치
-echo "[2/3] naver-stock-mcp 설치 중..."
-if $PYTHON_CMD -m pip install --upgrade naver-stock-mcp; then
-    echo -e "      ${GREEN}✓ naver-stock-mcp 설치 완료${NC}"
+# [2/3] Install
+echo "[2/3] Installing stocklens-mcp..."
+if $PYTHON_CMD -m pip install --upgrade stocklens-mcp > /tmp/stocklens-install.log 2>&1; then
+    echo -e "      ${GREEN}✓ stocklens-mcp installed${NC}"
 else
-    echo -e "      ${RED}✗ 패키지 설치 실패${NC}"
+    echo -e "      ${RED}✗ Installation failed${NC}"
+    echo "      Log: /tmp/stocklens-install.log"
     exit 1
 fi
 echo ""
 
-# [3/3] Claude Desktop 설정
-echo "[3/3] Claude Desktop 설정 중..."
-if $PYTHON_CMD -m stock_mcp_server.setup_claude stock-mcp-server; then
-    true
-else
-    echo -e "      ${RED}✗ Claude Desktop 설정 실패${NC}"
-    exit 1
-fi
+# [3/3] Configure
+echo "[3/3] Configuring Claude Desktop..."
+$PYTHON_CMD -m stock_mcp_server.setup_claude stocklens
 echo ""
 
 echo "=============================================="
-echo "  설치가 완료되었습니다!"
+echo "  Installation complete!"
 echo "=============================================="
 echo ""
-echo "다음 단계:"
-echo "  1. Claude Desktop을 완전히 종료하세요."
+echo "Next steps:"
+echo "  1. Quit Claude Desktop completely."
 if [[ "$OS" == "macOS" ]]; then
-    echo "     (Cmd + Q 또는 메뉴바에서 Quit)"
+    echo "     (Cmd+Q or Menu > Quit)"
 fi
-echo "  2. Claude Desktop을 다시 실행하세요."
-echo "  3. \"삼성전자 현재가 알려줘\" 라고 질문해보세요."
+echo "  2. Restart Claude Desktop."
+echo "  3. Try: \"Samsung Electronics current price\""
 echo ""

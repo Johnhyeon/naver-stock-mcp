@@ -1,9 +1,8 @@
 @echo off
-chcp 65001 >nul 2>nul
 setlocal
 
 echo ==============================================
-echo   naver-stock-mcp Update
+echo   StockLens Update
 echo ==============================================
 echo.
 
@@ -15,7 +14,7 @@ if errorlevel 1 (
 )
 
 echo Updating to latest version...
-python -m pip install --upgrade naver-stock-mcp
+python -m pip install --upgrade stocklens-mcp
 if errorlevel 1 (
     echo Update failed.
     pause

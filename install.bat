@@ -2,7 +2,7 @@
 setlocal EnableDelayedExpansion
 
 echo ==============================================
-echo   naver-stock-mcp Installer (Windows)
+echo   StockLens Installer (Windows)
 echo ==============================================
 echo.
 
@@ -11,28 +11,24 @@ echo [1/3] Checking Python...
 
 set "PYTHON_CMD="
 
-REM Try python in PATH first
 python --version >nul 2>&1
 if not errorlevel 1 (
     set "PYTHON_CMD=python"
     goto :found_python
 )
 
-REM Try python3 in PATH
 python3 --version >nul 2>&1
 if not errorlevel 1 (
     set "PYTHON_CMD=python3"
     goto :found_python
 )
 
-REM Try py launcher
 py -3 --version >nul 2>&1
 if not errorlevel 1 (
     set "PYTHON_CMD=py -3"
     goto :found_python
 )
 
-REM Search common install locations
 for %%P in (
     "%LOCALAPPDATA%\Programs\Python\Python315\python.exe"
     "%LOCALAPPDATA%\Programs\Python\Python314\python.exe"
@@ -51,7 +47,6 @@ for %%P in (
     )
 )
 
-REM Python not found
 echo       [FAIL] Python is not installed.
 echo.
 echo       Please install Python 3.11+ first:
@@ -68,21 +63,22 @@ echo       [OK] %PYVER% found
 echo       Using: !PYTHON_CMD!
 echo.
 
-REM [2/3] Install package from PyPI
-echo [2/3] Installing naver-stock-mcp...
-!PYTHON_CMD! -m pip install --upgrade naver-stock-mcp
+REM [2/3] Install stocklens-mcp from PyPI
+echo [2/3] Installing stocklens-mcp...
+!PYTHON_CMD! -m pip install --upgrade stocklens-mcp
 if errorlevel 1 (
     echo       [FAIL] Package installation failed.
+    echo       Try: %PYTHON_CMD% -m pip install --upgrade stocklens-mcp
     echo.
     pause
     exit /b 1
 )
-echo       [OK] naver-stock-mcp installed
+echo       [OK] stocklens-mcp installed
 echo.
 
 REM [3/3] Configure Claude Desktop
 echo [3/3] Configuring Claude Desktop...
-!PYTHON_CMD! -m stock_mcp_server.setup_claude stock-mcp-server
+!PYTHON_CMD! -m stock_mcp_server.setup_claude stocklens
 if errorlevel 1 (
     echo       [FAIL] Claude Desktop configuration failed.
     pause
@@ -98,6 +94,6 @@ echo Next steps:
 echo   1. Quit Claude Desktop completely.
 echo      (Right-click tray icon, then Quit)
 echo   2. Restart Claude Desktop.
-echo   3. Ask: "Samsung current price" to test.
+echo   3. Try asking: "Samsung Electronics current price"
 echo.
 pause

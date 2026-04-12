@@ -1,12 +1,18 @@
-"""Configure Claude Desktop to use the stock-data MCP server.
+"""Configure Claude Desktop to use the StockLens MCP server.
 
-Run `stock-mcp-setup` after installing the package.
+Run `stocklens-setup` after installing the package.
 """
 
 import json
 import os
 import sys
 from pathlib import Path
+
+
+# MCP 서버 키: 'stocklens'
+# v0.1.x 호환용: 'stock-data'가 있으면 자동으로 제거 (마이그레이션)
+SERVER_KEY = "stocklens"
+LEGACY_KEYS = ["stock-data"]
 
 
 def get_config_path() -> Path:
@@ -21,7 +27,7 @@ def get_config_path() -> Path:
         return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
 
 
-def configure(command: str = "stock-mcp-server") -> None:
+def configure(command: str = "stocklens") -> None:
     config_path = get_config_path()
     config_dir = config_path.parent
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -43,25 +49,35 @@ def configure(command: str = "stock-mcp-server") -> None:
     if "mcpServers" not in config:
         config["mcpServers"] = {}
 
-    config["mcpServers"]["stock-data"] = {"command": command}
+    # 이전 키 자동 정리 (마이그레이션)
+    removed_legacy = []
+    for legacy in LEGACY_KEYS:
+        if legacy in config["mcpServers"]:
+            del config["mcpServers"][legacy]
+            removed_legacy.append(legacy)
+    if removed_legacy:
+        print(f"  [OK] Removed legacy entries: {', '.join(removed_legacy)}")
+
+    # 새 키 등록
+    config["mcpServers"][SERVER_KEY] = {"command": command}
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
 
-    print(f"  [OK] Config updated")
+    print(f"  [OK] Config updated (key: {SERVER_KEY})")
     print(f"  Path: {config_path}")
 
 
 def main():
-    command = sys.argv[1] if len(sys.argv) > 1 else "stock-mcp-server"
+    command = sys.argv[1] if len(sys.argv) > 1 else "stocklens"
     print("==============================================")
-    print("  naver-stock-mcp - Claude Desktop Setup")
+    print("  StockLens - Claude Desktop Setup")
     print("==============================================")
     print()
     try:
         configure(command)
         print()
-        print("Done! Please restart Claude Desktop.")
+        print("Done! Please fully quit and restart Claude Desktop.")
     except Exception as e:
         print(f"  [ERROR] {e}", file=sys.stderr)
         sys.exit(1)

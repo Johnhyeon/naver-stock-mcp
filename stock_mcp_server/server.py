@@ -66,8 +66,8 @@ def safe_tool(func):
     return wrapper
 
 mcp = FastMCP(
-    "Korean Stock Data",
-    instructions="""한국 주식 데이터를 네이버 증권에서 실시간 조회합니다.
+    "StockLens",
+    instructions="""StockLens — 한국 주식 데이터를 네이버 증권에서 실시간 조회합니다.
 종목코드(예: 005930)나 종목명(예: 삼성전자)으로 검색할 수 있습니다.
 차트 데이터, 투자자 수급, 재무지표, 시장 지수를 제공합니다.
 
