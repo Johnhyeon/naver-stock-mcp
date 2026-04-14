@@ -1,6 +1,6 @@
 [project]
 name = "stocklens-mcp"
-version = "0.2.1"
+version = "0.2.2"
 description = "StockLens — AI가 진짜 데이터로 분석합니다. 네이버 증권 기반 한국 주식 MCP 서버 (차트, 수급, 재무, 스크리닝, Excel)"
 readme = "README.md"
 license = { text = "MIT" }
@@ -40,6 +40,7 @@ Issues = "https://github.com/Johnhyeon/stocklens-mcp/issues"
 # 새 커맨드 (v0.2.0+)
 stocklens = "stock_mcp_server.server:main"
 stocklens-setup = "stock_mcp_server.setup_claude:main"
+stocklens-doctor = "stock_mcp_server.doctor:main"
 # 하위 호환 (기존 naver-stock-mcp 사용자)
 stock-mcp-server = "stock_mcp_server.server:main"
 stock-mcp-setup = "stock_mcp_server.setup_claude:main"

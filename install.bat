@@ -7,6 +7,11 @@ echo   신규 설치 · 업데이트 · 마이그레이션 통합
 echo ==============================================
 echo.
 
+REM [0/5] Windows 다운로드 차단 자동 해제 (Zone.Identifier)
+REM    웹에서 다운받은 .bat이 차단돼 실행 즉시 꺼지는 문제 예방
+powershell -NoProfile -Command "Unblock-File -Path '%~f0' -ErrorAction SilentlyContinue" >nul 2>&1
+echo.
+
 REM [1/4] Find Python
 echo [1/4] Checking Python...
 
@@ -99,6 +104,17 @@ if errorlevel 1 (
 )
 echo.
 
+REM [5/5] 설치·설정 검증 (stocklens-doctor)
+echo [5/5] Verifying installation...
+!PYTHON_CMD! -m stock_mcp_server.doctor
+if errorlevel 1 (
+    echo.
+    echo       [FAIL] Doctor reported critical issues. See above for fix commands.
+    pause
+    exit /b 1
+)
+echo.
+
 echo ==============================================
 echo   완료! (Installation complete)
 echo ==============================================
@@ -107,5 +123,8 @@ echo 다음 단계:
 echo   1. Claude Desktop 완전히 종료 (트레이 아이콘 우클릭 → Quit)
 echo   2. Claude Desktop 재시작
 echo   3. 테스트: "삼성전자 현재가"
+echo.
+echo 문제 발생 시:
+echo   stocklens-doctor     (진단 다시 실행)
 echo.
 pause

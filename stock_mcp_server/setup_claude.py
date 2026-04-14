@@ -5,7 +5,9 @@ Run `stocklens-setup` after installing the package.
 
 import json
 import os
+import shutil
 import sys
+import sysconfig
 from pathlib import Path
 
 
@@ -13,6 +15,43 @@ from pathlib import Path
 # v0.1.x 호환용: 'stock-data'가 있으면 자동으로 제거 (마이그레이션)
 SERVER_KEY = "stocklens"
 LEGACY_KEYS = ["stock-data"]
+
+
+def resolve_server_entry(preferred_command: str = "stocklens") -> dict:
+    """PATH 의존 없이 확실히 실행되는 MCP server config entry를 생성.
+
+    우선순위:
+    1. shutil.which로 PATH에서 찾기 → 절대 경로
+    2. sysconfig scripts 디렉토리 직접 탐색 → 절대 경로
+    3. 최후 fallback: sys.executable + `-m stock_mcp_server.server`
+
+    반환된 entry는 Claude Desktop이 PATH 환경변수와 무관하게 실행 가능.
+    """
+    # 1) 사용자가 명시적으로 절대 경로를 줬으면 그대로 사용
+    if os.path.isabs(preferred_command) and Path(preferred_command).exists():
+        return {"command": preferred_command}
+
+    # 2) PATH 탐색
+    found = shutil.which(preferred_command)
+    if found:
+        return {"command": found}
+
+    # 3) sysconfig scripts 디렉토리 직접 탐색
+    try:
+        scripts_dir = Path(sysconfig.get_paths()["scripts"])
+        for candidate_name in (f"{preferred_command}.exe", preferred_command):
+            candidate = scripts_dir / candidate_name
+            if candidate.exists():
+                return {"command": str(candidate)}
+    except Exception:
+        pass
+
+    # 4) 최후 fallback: python -m 형태
+    #    stock_mcp_server.server 모듈 직접 실행
+    return {
+        "command": sys.executable,
+        "args": ["-m", "stock_mcp_server.server"],
+    }
 
 
 def get_config_path() -> Path:
@@ -58,14 +97,25 @@ def configure(command: str = "stocklens") -> None:
     if removed_legacy:
         print(f"  [OK] Removed legacy entries: {', '.join(removed_legacy)}")
 
-    # 새 키 등록
-    config["mcpServers"][SERVER_KEY] = {"command": command}
+    # 새 키 등록 — PATH 의존 없이 확실히 실행되는 entry 사용
+    entry = resolve_server_entry(command)
+    config["mcpServers"][SERVER_KEY] = entry
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
 
     print(f"  [OK] Config updated (key: {SERVER_KEY})")
     print(f"  Path: {config_path}")
+    print(f"  Command: {entry['command']}")
+    if "args" in entry:
+        print(f"  Args:    {' '.join(entry['args'])}")
+    # 검증: 기록한 command가 실제 실행 가능한지
+    cmd = entry["command"]
+    if Path(cmd).is_absolute() and not Path(cmd).exists():
+        print(f"  [WARN] Recorded command file does not exist: {cmd}")
+    elif not Path(cmd).is_absolute() and not shutil.which(cmd):
+        print(f"  [WARN] '{cmd}' not found in PATH. "
+              f"Run 'stocklens-doctor' to diagnose.")
 
 
 def main():

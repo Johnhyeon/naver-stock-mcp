@@ -76,9 +76,20 @@ else
 fi
 echo ""
 
-# [4/4] Configure Claude Desktop
-echo "[4/4] Configuring Claude Desktop..."
+# [4/5] Configure Claude Desktop
+echo "[4/5] Configuring Claude Desktop..."
 $PYTHON_CMD -m stock_mcp_server.setup_claude stocklens
+echo ""
+
+# [5/5] Verify installation
+echo "[5/5] Verifying installation..."
+if $PYTHON_CMD -m stock_mcp_server.doctor; then
+    :
+else
+    echo ""
+    echo -e "      ${RED}✗ Doctor reported critical issues. See above for fix commands.${NC}"
+    exit 1
+fi
 echo ""
 
 echo "=============================================="
@@ -92,4 +103,6 @@ if [[ "$OS" == "macOS" ]]; then
 fi
 echo "  2. Claude Desktop 재시작"
 echo "  3. 테스트: \"삼성전자 현재가\""
+echo ""
+echo "문제 발생 시: stocklens-doctor (진단 다시 실행)"
 echo ""

@@ -63,6 +63,16 @@ Show me Samsung Electronics (005930) current price
 
 If you see the stock name, price, and volume, you're all set.
 
+## Installation Diagnosis
+
+If MCP does not appear in Claude Desktop:
+
+```bash
+stocklens-doctor
+```
+
+Auto-checks Python / package / command / config in 4 steps. Shows the exact fix command. Send this to anyone having install trouble.
+
 ## Example Queries
 
 ```
