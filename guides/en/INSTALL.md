@@ -109,7 +109,7 @@ These two lines install the package AND configure Claude Desktop automatically.
 
 Paste into PowerShell:
 ```powershell
-irm https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat -OutFile "$env:TEMP\stocklens_install.bat"; & "$env:TEMP\stocklens_install.bat"
+irm https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.bat -OutFile "$env:TEMP\stocklens_install.bat"; & "$env:TEMP\stocklens_install.bat"
 ```
 
 Downloads and runs install.bat automatically. No `.txt` save issue.
@@ -117,7 +117,7 @@ Downloads and runs install.bat automatically. No `.txt` save issue.
 ### Method C: Download install.bat (Visual step-by-step)
 
 **Windows**:
-1. Visit https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat
+1. Visit https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.bat
 2. Right-click → **"Save Link As"** → save somewhere
 3. Double-click the saved `install.bat`
 4. A terminal window opens and runs automatically
@@ -132,7 +132,7 @@ Some browsers save the file as `install.bat.txt`. Fix:
 
 **macOS/Linux**:
 ```bash
-curl -O https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh
+curl -O https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.sh
 chmod +x install.sh
 ./install.sh
 ```

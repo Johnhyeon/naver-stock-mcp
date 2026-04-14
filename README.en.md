@@ -48,7 +48,7 @@ stocklens-setup
 
 ### Method B: Download Installer (Non-developers)
 
-Download [install.bat](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat) (Windows) or [install.sh](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh) (Mac/Linux) and double-click.
+Download [install.bat](https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.bat) (Windows) or [install.sh](https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.sh) (Mac/Linux) and double-click.
 
 > ⚠️ If the file opens in **Notepad** on Windows, your browser saved it as `install.bat.txt`. Right-click → "Open with" → "Windows Command Processor", or see [detailed guide](guides/en/INSTALL.md#step-3-install-stocklens).
 

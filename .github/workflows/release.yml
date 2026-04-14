@@ -1,0 +1,76 @@
+name: Release
+
+# 태그 푸시(v*) 시 자동:
+# 1. Python 빌드 (wheel + sdist)
+# 2. PyPI 업로드
+# 3. GitHub Release 생성 + install.bat/sh 자산 첨부
+
+on:
+  push:
+    tags:
+      - 'v*'  # v0.2.1, v0.3.0 등
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # GitHub Release 생성용
+      id-token: write  # PyPI Trusted Publishing (OIDC) 용
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify version matches tag
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          PKG_VER=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "::error::Tag version ($TAG_VER) does not match pyproject.toml version ($PKG_VER)"
+            exit 1
+          fi
+          echo "Version OK: $PKG_VER"
+
+      - name: Build distribution
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Verify distribution
+        run: |
+          python -m pip install --upgrade twine
+          twine check dist/*
+
+      # Option A: Trusted Publishing (OIDC) — 토큰 불필요, PyPI 설정 필요
+      # https://docs.pypi.org/trusted-publishers/
+      # - name: Publish to PyPI (Trusted Publishing)
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+
+      # Option B: API 토큰 (현재 활성) — 간단, 토큰 관리 필요
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            install.bat
+            install.sh
+            dist/*.whl
+            dist/*.tar.gz
+          generate_release_notes: true
+          body: |
+            ## 설치
+            ```bash
+            pip install --upgrade stocklens-mcp
+            stocklens-setup
+            ```
+
+            또는 `install.bat` (Windows) / `install.sh` (macOS/Linux) 다운로드 후 실행.
+
+            자세한 설치 가이드: [guides/ko/INSTALL.md](https://github.com/Johnhyeon/stocklens-mcp/blob/main/guides/ko/INSTALL.md)

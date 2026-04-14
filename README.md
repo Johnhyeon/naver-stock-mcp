@@ -48,7 +48,7 @@ stocklens-setup
 
 ### 방법 B: 파일 다운로드 (비개발자)
 
-[install.bat](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat) (Windows) 또는 [install.sh](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh) (Mac/Linux) 다운로드 → 더블클릭 실행
+[install.bat](https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.bat) (Windows) 또는 [install.sh](https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.sh) (Mac/Linux) 다운로드 → 더블클릭 실행
 
 > ⚠️ Windows에서 파일이 **메모장으로 열리면** `install.bat.txt`로 저장된 경우. 우클릭 → "연결 프로그램" → "Windows 명령 프로세서" 선택하거나, [상세 가이드](guides/ko/INSTALL.md#step-3-stocklens-설치) 참조.
 

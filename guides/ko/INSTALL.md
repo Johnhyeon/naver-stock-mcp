@@ -110,7 +110,7 @@ stocklens-setup
 
 PowerShell에 복붙:
 ```powershell
-irm https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat -OutFile "$env:TEMP\stocklens_install.bat"; & "$env:TEMP\stocklens_install.bat"
+irm https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.bat -OutFile "$env:TEMP\stocklens_install.bat"; & "$env:TEMP\stocklens_install.bat"
 ```
 
 install.bat를 자동으로 다운로드하고 실행. `.txt`로 저장되는 문제 없음.
@@ -118,7 +118,7 @@ install.bat를 자동으로 다운로드하고 실행. `.txt`로 저장되는 �
 ### 방법 C: install.bat 파일 다운로드 (시각적으로 단계 보고 싶을 때)
 
 **Windows**:
-1. https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat 접속
+1. https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.bat 접속
 2. 우클릭 → **"다른 이름으로 저장"**
 3. 저장된 `install.bat` 더블클릭
 4. 창이 열리고 자동으로 진행됨
@@ -133,7 +133,7 @@ install.bat를 자동으로 다운로드하고 실행. `.txt`로 저장되는 �
 
 **macOS/Linux**:
 ```bash
-curl -O https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh
+curl -O https://github.com/Johnhyeon/stocklens-mcp/releases/latest/download/install.sh
 chmod +x install.sh
 ./install.sh
 ```
