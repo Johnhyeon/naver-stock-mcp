@@ -6,7 +6,7 @@
 
 **AI가 진짜 데이터로 분석합니다**
 
-[![PyPI](https://img.shields.io/pypi/v/naver-stock-mcp.svg)](https://pypi.org/project/naver-stock-mcp/)
+[![PyPI](https://img.shields.io/pypi/v/stocklens-mcp.svg)](https://pypi.org/project/stocklens-mcp/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -37,16 +37,20 @@ AI에게 차트 이미지를 보여주면 **숫자를 추측해서 틀린 분석
 
 ## 빠른 시작
 
-### 방법 A: 개발자 (명령어 2줄)
+### ⭐ 방법 A: 명령어 복붙 (가장 권장)
+
+터미널(PowerShell / cmd / Terminal) 열고 두 줄 복붙:
 
 ```bash
-pip install naver-stock-mcp
-stock-mcp-setup
+pip install stocklens-mcp
+stocklens-setup
 ```
 
-### 방법 B: 비개발자 (원클릭)
+### 방법 B: 파일 다운로드 (비개발자)
 
-[install.bat](https://raw.githubusercontent.com/Johnhyeon/naver-stock-mcp/main/install.bat) (Windows) 또는 [install.sh](https://raw.githubusercontent.com/Johnhyeon/naver-stock-mcp/main/install.sh) (Mac/Linux) 다운로드 → 더블클릭 실행
+[install.bat](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat) (Windows) 또는 [install.sh](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh) (Mac/Linux) 다운로드 → 더블클릭 실행
+
+> ⚠️ Windows에서 파일이 **메모장으로 열리면** `install.bat.txt`로 저장된 경우. 우클릭 → "연결 프로그램" → "Windows 명령 프로세서" 선택하거나, [상세 가이드](guides/ko/INSTALL.md#step-3-stocklens-설치) 참조.
 
 **Claude Desktop**을 완전히 종료했다가 재시작하세요.
 
@@ -85,7 +89,7 @@ Claude에서:
 
 ## 기여
 
-이슈, PR 모두 환영합니다. 버그 제보나 기능 요청은 [Issues](https://github.com/Johnhyeon/naver-stock-mcp/issues)에 남겨주세요.
+이슈, PR 모두 환영합니다. 버그 제보나 기능 요청은 [Issues](https://github.com/Johnhyeon/stocklens-mcp/issues)에 남겨주세요.
 
 ## 라이선스
 

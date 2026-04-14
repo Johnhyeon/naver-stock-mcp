@@ -81,9 +81,40 @@ Download from https://claude.ai/download — select your OS, install, sign in.
 
 ---
 
-## Step 3. Install StockLens (2 methods)
+## Step 3. Install StockLens
 
-### Method A: One-Click (Recommended for non-developers)
+Choose one of **3 methods**. **Method A is easiest**.
+
+### ⭐ Method A: Copy-Paste Commands (Most Recommended)
+
+No file download needed. Paste once into your terminal — works on Windows/macOS/Linux.
+
+**Windows** — open PowerShell or Command Prompt (cmd):
+```powershell
+pip install stocklens-mcp
+stocklens-setup
+```
+
+**macOS/Linux** — open Terminal:
+```bash
+pip3 install stocklens-mcp
+stocklens-setup
+```
+
+These two lines install the package AND configure Claude Desktop automatically.
+
+> 💡 If `pip` isn't recognized → use `py -m pip install stocklens-mcp` (Windows) or `python3 -m pip install stocklens-mcp` (mac/Linux).
+
+### Method B: PowerShell One-liner (Windows, download+run in one shot)
+
+Paste into PowerShell:
+```powershell
+irm https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat -OutFile "$env:TEMP\stocklens_install.bat"; & "$env:TEMP\stocklens_install.bat"
+```
+
+Downloads and runs install.bat automatically. No `.txt` save issue.
+
+### Method C: Download install.bat (Visual step-by-step)
 
 **Windows**:
 1. Visit https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat
@@ -92,18 +123,18 @@ Download from https://claude.ai/download — select your OS, install, sign in.
 4. A terminal window opens and runs automatically
 5. Wait for "Installation complete!"
 
+**⚠️ If the file opens as `.txt` (common issue):**
+Some browsers save the file as `install.bat.txt`. Fix:
+
+- **Check extension:** File Explorer → "View" → check "File name extensions" → if `install.bat.txt`, **rename and remove `.txt`**
+- **Or** right-click → **"Open with" → "Windows Command Processor"**
+- **Or** right-click → **"Run as administrator"**
+
 **macOS/Linux**:
 ```bash
 curl -O https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh
 chmod +x install.sh
 ./install.sh
-```
-
-### Method B: Command Line (Developers)
-
-```bash
-pip install stocklens-mcp
-stocklens-setup
 ```
 
 ---

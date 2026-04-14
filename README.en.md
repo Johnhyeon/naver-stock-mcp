@@ -6,7 +6,7 @@
 
 **AI-powered Korean stock analysis with real data**
 
-[![PyPI](https://img.shields.io/pypi/v/naver-stock-mcp.svg)](https://pypi.org/project/naver-stock-mcp/)
+[![PyPI](https://img.shields.io/pypi/v/stocklens-mcp.svg)](https://pypi.org/project/stocklens-mcp/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -37,16 +37,20 @@ When you show AI a chart image, it **guesses the numbers and often gets them wro
 
 ## Quick Start
 
-### Method A: Developers (2 commands)
+### ⭐ Method A: Copy-Paste Commands (Most Recommended)
+
+Open your terminal (PowerShell / cmd / Terminal) and paste:
 
 ```bash
-pip install naver-stock-mcp
-stock-mcp-setup
+pip install stocklens-mcp
+stocklens-setup
 ```
 
-### Method B: Non-developers (one-click)
+### Method B: Download Installer (Non-developers)
 
-Download [install.bat](https://raw.githubusercontent.com/Johnhyeon/naver-stock-mcp/main/install.bat) (Windows) or [install.sh](https://raw.githubusercontent.com/Johnhyeon/naver-stock-mcp/main/install.sh) (Mac/Linux) and double-click.
+Download [install.bat](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat) (Windows) or [install.sh](https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh) (Mac/Linux) and double-click.
+
+> ⚠️ If the file opens in **Notepad** on Windows, your browser saved it as `install.bat.txt`. Right-click → "Open with" → "Windows Command Processor", or see [detailed guide](guides/en/INSTALL.md#step-3-install-stocklens).
 
 Then **fully quit and restart Claude Desktop**.
 
@@ -89,7 +93,7 @@ StockLens is designed for **Korean stock market (KOSPI/KOSDAQ)** data from Naver
 
 ## Contributing
 
-Issues and PRs are welcome. Please open an [Issue](https://github.com/Johnhyeon/naver-stock-mcp/issues) for bugs or feature requests.
+Issues and PRs are welcome. Please open an [Issue](https://github.com/Johnhyeon/stocklens-mcp/issues) for bugs or feature requests.
 
 ## License
 

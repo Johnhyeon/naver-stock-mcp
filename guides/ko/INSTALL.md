@@ -82,9 +82,40 @@ https://claude.ai/download
 
 ---
 
-## Step 3. StockLens 설치 (2가지 방법)
+## Step 3. StockLens 설치
 
-### 방법 A: 원클릭 (비개발자 권장)
+아래 **3가지 방법** 중 하나 선택. **방법 A 가장 쉬움**.
+
+### ⭐ 방법 A: 명령어 복붙 (가장 권장)
+
+파일 다운로드 없이 터미널에 **한 번만 복붙**하면 끝. Windows/macOS/Linux 모두 동일.
+
+**Windows** — PowerShell 또는 명령 프롬프트(cmd) 열고:
+```powershell
+pip install stocklens-mcp
+stocklens-setup
+```
+
+**macOS/Linux** — 터미널에서:
+```bash
+pip3 install stocklens-mcp
+stocklens-setup
+```
+
+두 줄만 실행하면 설치 + Claude Desktop 연결까지 자동 완료.
+
+> 💡 `pip`가 인식 안 되면 → `py -m pip install stocklens-mcp` (Windows) 또는 `python3 -m pip install stocklens-mcp` (mac/Linux) 로 대체.
+
+### 방법 B: 파워셸 원라이너 (Windows 전용, 다운로드+실행 한 번에)
+
+PowerShell에 복붙:
+```powershell
+irm https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat -OutFile "$env:TEMP\stocklens_install.bat"; & "$env:TEMP\stocklens_install.bat"
+```
+
+install.bat를 자동으로 다운로드하고 실행. `.txt`로 저장되는 문제 없음.
+
+### 방법 C: install.bat 파일 다운로드 (시각적으로 단계 보고 싶을 때)
 
 **Windows**:
 1. https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.bat 접속
@@ -93,19 +124,18 @@ https://claude.ai/download
 4. 창이 열리고 자동으로 진행됨
 5. "Installation complete!" 메시지 확인
 
+**⚠️ `.txt` 파일로 열리는 경우 (흔함):**
+브라우저가 `install.bat.txt`로 저장하는 경우가 있습니다. 해결:
+
+- **확장자 확인:** 파일 탐색기 "보기" → "파일 확장명" 체크 → `install.bat.txt`면 **파일명 변경해서 `.txt` 삭제**
+- **또는** 파일 우클릭 → **"연결 프로그램" → "Windows 명령 프로세서"** 선택
+- **또는** 우클릭 → **"관리자 권한으로 실행"**
+
 **macOS/Linux**:
 ```bash
 curl -O https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh
 chmod +x install.sh
 ./install.sh
-```
-
-### 방법 B: 명령어 (개발자)
-
-터미널에서:
-```bash
-pip install stocklens-mcp
-stocklens-setup
 ```
 
 ---
