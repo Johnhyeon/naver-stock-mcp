@@ -353,7 +353,8 @@ async def get_price(code: str) -> str:
 @safe_tool
 @track_metrics("get_flow")
 async def get_flow(code: str, days: int = 20) -> str:
-    """투자자수급 — 투자자별 매매동향 (외국인/기관/개인 순매수량)을 가져옵니다.
+    """투자자수급 — 투자자별 매매동향 (기관/외국인 순매매 주식 수)을 가져옵니다.
+    네이버 증권 소스 특성상 **개인 순매매는 제공되지 않습니다** (기관·외국인만).
     "외국인 수급", "기관 순매수", "수급 분석", "누가 사고 있어" 같은 질문에 사용합니다.
 
     Args:
@@ -403,12 +404,35 @@ async def get_financial(code: str) -> str:
     if not data:
         return f"종목코드 {code}의 재무지표를 가져올 수 없습니다."
 
+    periods = data.get("_periods") or {}
+    annual = periods.get("annual", [])
+    quarterly = periods.get("quarterly", [])
+
+    def _fmt(p: list[str], v: list[str]) -> str:
+        parts = []
+        for pp, vv in zip(p, v):
+            if not pp and not vv:
+                continue
+            if not vv:
+                vv = "추정치 없음" if "(E)" in pp else "데이터 없음"
+            parts.append(f"{pp or '?'}={vv}")
+        return " | ".join(parts)
+
     lines = [f"종목: {data.get('name', code)} ({code})", ""]
     for key, value in data.items():
-        if key in ("code", "name"):
+        if key in ("code", "name", "_periods"):
             continue
         if isinstance(value, list):
-            lines.append(f"{key}: {' | '.join(value)}")
+            if annual or quarterly:
+                a_vals = value[: len(annual)]
+                q_vals = value[len(annual) : len(annual) + len(quarterly)]
+                lines.append(f"{key}:")
+                if annual:
+                    lines.append(f"  [연간] {_fmt(annual, a_vals)}")
+                if quarterly:
+                    lines.append(f"  [분기] {_fmt(quarterly, q_vals)}")
+            else:
+                lines.append(f"{key}: {' | '.join(value)}")
         else:
             lines.append(f"{key}: {value}")
     return "\n".join(lines)
@@ -457,7 +481,10 @@ async def list_themes(page: int = 1) -> str:
     lines.append("테마명 | 전일대비 | 최근3일 | 상승/보합/하락 | 주도주")
     lines.append("---|---|---|---|---")
     for t in themes:
-        leaders = ", ".join(t["leaders"])
+        leaders = ", ".join(
+            f"{ld['name']}({ld['code']})" if ld.get("code") else ld["name"]
+            for ld in t["leaders"]
+        )
         counts = f"{t['up_count']}/{t['flat_count']}/{t['down_count']}"
         lines.append(
             f"{t['name']} | {t['change_rate']} | {t['recent_3d_rate']} | {counts} | {leaders}"
