@@ -45,7 +45,7 @@ from stock_mcp_server._indicators import (
     compute_indicators,
     AVAILABLE_INDICATORS,
 )
-from stock_mcp_server._chart_html import render_chart_html
+from stock_mcp_server._chart_html import render_chart_html, render_multi_chart_html
 import asyncio
 import json
 import pandas as pd
@@ -344,7 +344,14 @@ async def get_chart(code: str, timeframe: str = "day", count: int = 120) -> str:
 @mcp.tool()
 @safe_tool
 @track_metrics("get_chart_html")
-async def get_chart_html(code: str, timeframe: str = "day", count: int = 120) -> str:
+async def get_chart_html(
+    code: str,
+    timeframe: str = "day",
+    count: int = 120,
+    timeframes: list[str] | None = None,
+    show_sr: bool = True,
+    custom_sr: list[dict] | None = None,
+) -> str:
     """차트HTML — 완성된 캔들+거래량 차트 HTML 반환. candlestick chart, price visualization, stock dashboard, OHLCV chart.
 
     🔴 **절대 규칙 — artifact에 주가/캔들/시계열 차트를 포함하는 모든 경우 이 도구 호출:**
@@ -357,29 +364,66 @@ async def get_chart_html(code: str, timeframe: str = "day", count: int = 120) ->
     - Canvas 2D API로 직접 캔들 그리기 X
     - SVG/HTML로 처음부터 차트 만들기 X
     - 이동평균·볼린저·지지저항 선을 수동 계산해 그리기 X
-    → 이 도구가 이미 SVG 기반 완성본(MA5/20/60, 고점/저점 마커, 거래량 패널, 라이트/다크 자동)을 제공함.
-    수동 작업은 시간 낭비이며 결과 품질이 더 낮습니다.
+    → 이 도구가 이미 SVG 기반 완성본(MA5/20/60, 고점/저점 마커, 거래량 패널,
+    지지/저항 영역 강도별 오버레이, 라이트/다크 자동)을 제공함.
+
+    ⭐ **멀티 타임프레임** — 일/주/월을 한 번에 보고 싶을 때:
+    - `timeframes=["day","week","month"]` 로 호출 → 세로로 배치된 통합 HTML
+    - 각 프레임 count는 자동 (일봉 120 / 주봉 52 / 월봉 24)
+    - 단일 프레임 원하면 기존대로 `timeframe="day"`
+
+    ⭐ **Claude 판단 S/R 반영** — 분석 내용과 차트 일관성:
+    분석에서 "저는 1,520을 저항으로 봅니다"라고 말하면 `custom_sr`로 차트에 **직접 표시**:
+    ```
+    custom_sr=[
+        {"price": 1520, "kind": "resistance", "label": "전고점"},
+        {"price": 1440, "kind": "support", "strength": "strong"},
+        {"low": 1270, "high": 1300, "kind": "support", "label": "주요 지지대"},
+    ]
+    ```
+    - price 단일값 → 자동으로 얇은 band (±0.3%)
+    - low/high 지정 → 그대로 band
+    - label 주면 차트에 그 텍스트 표시 (없으면 "저항"/"지지" 자동)
+    - strength: weak/medium/strong (기본 medium, 오버레이 투명도 조정)
+    - custom_sr 지정 시 자동 계산은 스킵됨 (Claude 판단 우선)
 
     ⚠️ **결과 처리 규칙:**
     - 반환된 HTML을 artifact에 **그대로** 출력 (재파싱·재렌더링 금지)
-    - 캔들 너비·레이아웃·색상·날짜 라벨 등 재작성 불필요
-    - 차트 외 정보(지표 카드, 재무 테이블 등)는 별도 HTML로 추가 가능하지만,
-      캔들 차트 자체는 이 도구 결과를 embed 또는 inline 포함
 
     Args:
         code: 종목코드 6자리 (예: "005930")
-        timeframe: "day"(일봉), "week"(주봉), "month"(월봉)
-        count: 캔들 개수 (기본 120, 최대 500)
+        timeframe: 단일 프레임 — "day"(일봉), "week"(주봉), "month"(월봉)
+        count: 단일 프레임 캔들 개수 (기본 120, 최대 500)
+        timeframes: 멀티 프레임 리스트 (예: ["day","week","month"]). 지정 시 timeframe/count 무시.
+        show_sr: 자동 S/R 오버레이 표시 (기본 True). custom_sr 있으면 무시됨.
+        custom_sr: Claude 판단 S/R 리스트. 지정 시 자동 계산 대신 이것 사용.
     """
-    count = min(count, 500)
     info = await get_current_price(code)
     name = info.get("name", code) if info else code
 
+    # 멀티 프레임 모드
+    if timeframes:
+        frame_defaults = {"day": 120, "week": 52, "month": 24}
+        frames = []
+        for tf in timeframes:
+            c = frame_defaults.get(tf, 120)
+            ohlcv = await get_ohlcv(code, tf, c)
+            if ohlcv:
+                frames.append({"timeframe": tf, "ohlcv": ohlcv})
+        if not frames:
+            return f"종목코드 {code}의 차트 데이터를 가져올 수 없습니다."
+        return render_multi_chart_html(code, name, frames, show_sr=show_sr, custom_sr=custom_sr)
+
+    # 단일 프레임 모드
+    count = min(count, 500)
     ohlcv = await get_ohlcv(code, timeframe, count)
     if not ohlcv:
         return f"종목코드 {code}의 차트 데이터를 가져올 수 없습니다."
 
-    return render_chart_html(code, name, ohlcv, timeframe=timeframe)
+    return render_chart_html(
+        code, name, ohlcv,
+        timeframe=timeframe, show_sr=show_sr, custom_sr=custom_sr,
+    )
 
 
 @mcp.tool()
