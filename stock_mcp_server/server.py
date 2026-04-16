@@ -106,22 +106,33 @@ mcp = FastMCP(
 
 ## 차트 시각화 규칙
 
-### 🚨 주가 시계열 차트 **선행 조건** (절대 원칙)
+### 🔴 주가 차트 렌더링 (절대 원칙)
 
-가격 시계열을 차트로 렌더링할 때 **반드시 `get_chart` 도구 호출**로 OHLCV 원본 수집.
+**artifact에 캔들/가격 시계열 차트를 포함할 때는 반드시 `get_chart_html` 호출.**
+분석 응답·대시보드·시각화 등 용도 무관. 차트가 답변에 들어가면 이 도구.
 
-**금지 패턴:**
-- `get_flow`의 [참고] 종가·거래량 컬럼을 차트 소스로 전용 금지
-- `get_multi_chart_stats`의 집계값으로 시계열 차트 대체 금지
-- `get_indicators`의 `candle` 키 (최신 1봉만)로 시계열 차트 구성 금지
-- `get_price`의 스냅샷으로 차트 구성 금지
+```
+get_chart_html(code, "day", count=120)  → 완성 HTML (SVG, MA5/20/60, 거래량, 마커 포함)
+```
 
-**올바른 패턴:**
-- 일봉 차트 → `get_chart(code, "day", count=120~260)`
-- 주봉 차트 → `get_chart(code, "week", count=52~150)`
-- 월봉 차트 → `get_chart(code, "month", count=24~60)`
+**직접 작성 절대 금지:**
+- Chart.js / chartjs-chart-financial / ApexCharts / Plotly → 사용 X
+- Canvas 2D API로 캔들 그리기 X
+- SVG/HTML로 처음부터 차트 제작 X
+- 이동평균·볼린저밴드 수동 계산·렌더 X
 
-OHL 없이 close만으로 line chart 그리지 말 것. 원본 OHLCV가 없으면 차트 포기하고 텍스트 분석으로 대체하는 것이 허구 차트보다 나음.
+### 도구 역할 구분
+- `get_chart_html`: **시각화용** (artifact에 렌더할 HTML)
+- `get_chart`: **데이터 분석용** (OHLCV 텍스트 — 수치 계산·요약만)
+- `get_indicators`: **판정값** (RSI/MACD/Phase 등 숫자+라벨)
+
+### 시계열 대체 소스 금지
+- `get_flow`의 [참고] 종가·거래량 컬럼을 차트 소스로 사용 X
+- `get_multi_chart_stats`의 집계값을 시계열 차트 X
+- `get_indicators`의 `candle`(최신 1봉) X
+- `get_price`의 스냅샷 X
+
+OHL 없이 close만으로 line chart 그리지 말 것.
 
 ### 기본 기간
 - **차트는 반드시 120일 이상 불러와서 그린다.** 60일 같은 짧은 기간으로 호출하지 말 것.
@@ -334,21 +345,26 @@ async def get_chart(code: str, timeframe: str = "day", count: int = 120) -> str:
 @safe_tool
 @track_metrics("get_chart_html")
 async def get_chart_html(code: str, timeframe: str = "day", count: int = 120) -> str:
-    """차트HTML — 완성된 캔들+거래량 차트 HTML을 반환합니다. artifact에 그대로 복붙하면 즉시 렌더링.
+    """차트HTML — 완성된 캔들+거래량 차트 HTML 반환. candlestick chart, price visualization, stock dashboard, OHLCV chart.
 
-    ⭐ **"차트 보여줘" / "시각화" / "대시보드" / "캔들 차트"** 요청 시 사용.
-    SVG 기반 완성본. MA5/20/60 이평선, 고점/저점 마커, 거래량 패널, 라이트/다크 자동 포함.
+    🔴 **절대 규칙 — artifact에 주가/캔들/시계열 차트를 포함하는 모든 경우 이 도구 호출:**
+    - "차트 보여줘" / "분석 대시보드" / "주가 차트" / "시각화" / "dashboard" / "widget" → 반드시 사용
+    - 분석 응답(analyze, review, breakdown)에 차트를 포함할 때도 → 반드시 사용
+    - 단순 데이터 요청에도 차트가 답변에 들어가면 → 반드시 사용
 
-    ⚠️ **절대 규칙 (읽기 전 reasoning 금지):**
-    - 이 도구 결과는 **완전한 HTML 문서**입니다. artifact에 **그대로** 출력하세요.
-    - Chart.js / 커스텀 Canvas / SVG를 **직접 작성하지 마세요**. 이미 완성됨.
-    - 캔들 너비·레이아웃·색상·날짜 라벨 등 **재작성 불필요**. 그대로 사용.
-    - 데이터를 다시 파싱해서 재렌더링하지 마세요.
+    🔴 **직접 작성 절대 금지:**
+    - Chart.js, chartjs-chart-financial, ApexCharts, Plotly 등 외부 라이브러리 코드 X
+    - Canvas 2D API로 직접 캔들 그리기 X
+    - SVG/HTML로 처음부터 차트 만들기 X
+    - 이동평균·볼린저·지지저항 선을 수동 계산해 그리기 X
+    → 이 도구가 이미 SVG 기반 완성본(MA5/20/60, 고점/저점 마커, 거래량 패널, 라이트/다크 자동)을 제공함.
+    수동 작업은 시간 낭비이며 결과 품질이 더 낮습니다.
 
-    ⚠️ **용도 구분:**
-    - 데이터 수치 분석용이면 get_chart(OHLCV 텍스트) 사용
-    - 이 도구는 **시각화 전용**
-    - "분석해줘" (시각화 요청 없음) → 이 도구 호출 X, 다른 데이터 도구로 답변
+    ⚠️ **결과 처리 규칙:**
+    - 반환된 HTML을 artifact에 **그대로** 출력 (재파싱·재렌더링 금지)
+    - 캔들 너비·레이아웃·색상·날짜 라벨 등 재작성 불필요
+    - 차트 외 정보(지표 카드, 재무 테이블 등)는 별도 HTML로 추가 가능하지만,
+      캔들 차트 자체는 이 도구 결과를 embed 또는 inline 포함
 
     Args:
         code: 종목코드 6자리 (예: "005930")
