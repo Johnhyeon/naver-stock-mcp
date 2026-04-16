@@ -241,12 +241,32 @@ async def get_financials(code: str) -> dict:
         result["name"] = name_tag.text.strip()
 
     # 투자정보 테이블 (PER, PBR, 배당수익률 등)
+    # 구조: thead[0]은 대분류(연간/분기 colspan), thead[1]은 실제 기간 라벨
     cop_info = soup.select("div.cop_analysis table")
     if cop_info:
         for table in cop_info:
-            headers = [th.text.strip() for th in table.select("th")]
-            rows = table.select("tr")
-            for row in rows:
+            thead_rows = table.select("thead tr")
+            annual_count, quarterly_count = 0, 0
+            periods_flat: list[str] = []
+            if len(thead_rows) >= 2:
+                for th in thead_rows[0].select("th"):
+                    label = th.text.strip()
+                    try:
+                        span = int(th.get("colspan", "1"))
+                    except ValueError:
+                        span = 1
+                    if "연간" in label:
+                        annual_count = span
+                    elif "분기" in label:
+                        quarterly_count = span
+                periods_flat = [th.text.strip() for th in thead_rows[1].select("th")]
+                if periods_flat and len(periods_flat) == annual_count + quarterly_count:
+                    result["_periods"] = {
+                        "annual": periods_flat[:annual_count],
+                        "quarterly": periods_flat[annual_count:],
+                    }
+
+            for row in table.select("tbody tr"):
                 th = row.select_one("th")
                 tds = row.select("td")
                 if th and tds:
@@ -308,7 +328,11 @@ async def list_themes(page: int = 1) -> list[dict]:
         for leader_cell in cells[6:8]:
             leader_a = leader_cell.find("a")
             if leader_a:
-                leaders.append(leader_a.text.strip())
+                code_match = re.search(r"code=([A-Za-z0-9]{6})", leader_a.get("href", ""))
+                leaders.append({
+                    "name": leader_a.text.strip(),
+                    "code": code_match.group(1) if code_match else "",
+                })
 
         results.append({
             "name": name_tag.text.strip(),
