@@ -5,6 +5,7 @@ Claude에서 자연어로 분석할 수 있게 해줍니다.
 """
 
 import functools
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -1429,10 +1430,10 @@ async def get_us_info(ticker: str) -> str:
         return f"티커 '{ticker}'를 찾을 수 없습니다."
 
     lines = [
-        f"**{data.get('name', data['ticker'])}** ({data['ticker']})",
-        f"섹터/산업: {data.get('sector', '-')} / {data.get('industry', '-')}",
-        f"거래소: {data.get('exchange', '-')} ({data.get('quote_type', '-')})",
-        f"국가: {data.get('country', '-')}",
+        f"**{data.get('name') or data['ticker']}** ({data['ticker']})",
+        f"섹터/산업: {data.get('sector') or '-'} / {data.get('industry') or '-'}",
+        f"거래소: {data.get('exchange') or '-'} ({data.get('quote_type') or '-'})",
+        f"국가: {data.get('country') or '-'}",
     ]
     if data.get("market_cap"):
         lines.append(f"시가총액: {_fmt_num(data['market_cap'])}")
@@ -1561,9 +1562,12 @@ async def get_us_earnings(ticker: str) -> str:
     if data is None:
         return f"티커 '{ticker}'를 찾을 수 없습니다."
 
-    lines = [f"**{data['ticker']}** 실적 일정 & 이력"]
+    upcoming = data.get("upcoming", []) or []
+    history = data.get("history", []) or []
+    if not upcoming and not history:
+        return f"**{data['ticker']}** 실적 일정 & 이력\n\n실적 데이터 없음 (ETF나 개별 주식이 아닌 자산은 해당 없음)."
 
-    upcoming = data.get("upcoming", [])
+    lines = [f"**{data['ticker']}** 실적 일정 & 이력"]
     if upcoming:
         lines.append("")
         lines.append("## 🗓️ 예정")
@@ -1575,7 +1579,6 @@ async def get_us_earnings(ticker: str) -> str:
         lines.append("")
         lines.append("예정된 실적 발표일 정보 없음.")
 
-    history = data.get("history", [])
     if history:
         lines.append("")
         lines.append("## 📊 최근 실적 서프라이즈")
@@ -1606,6 +1609,15 @@ async def get_us_analyst(ticker: str) -> str:
     data = await us.get_analyst_ratings(ticker)
     if data is None:
         return f"티커 '{ticker}'를 찾을 수 없습니다."
+
+    # ETF·펀드는 애널리스트 커버 없음
+    has_any = bool(
+        data.get("price_targets") or data.get("recommendation_key")
+        or data.get("recommendation_mean") or data.get("analyst_count")
+        or data.get("recommendations_by_month") or data.get("recent_upgrades_downgrades")
+    )
+    if not has_any:
+        return f"**{data['ticker']}** 애널리스트 의견\n\n애널리스트 커버리지 없음 (ETF나 신규·소형주의 경우 해당 없음)."
 
     lines = [f"**{data['ticker']}** 애널리스트 의견"]
 
@@ -1869,7 +1881,7 @@ async def get_us_insider(ticker: str) -> str:
 
     if not summary and not tx:
         lines.append("")
-        lines.append("내부자 거래 정보 없음.")
+        lines.append("내부자 거래 정보 없음 (ETF나 펀드는 해당 없음).")
 
     # 현재 내부자 명단 (roster)
     roster = await us.get_insider_roster(ticker)
@@ -1906,6 +1918,16 @@ async def get_us_holders(ticker: str) -> str:
 
     lines = [f"**{data['ticker']}** 보유 현황"]
 
+    # ETF는 institutional_holders/mutualfund_holders 데이터 없음
+    has_any = bool(
+        data.get("institutional_holders") or data.get("mutualfund_holders")
+        or data.get("held_pct_institutions") or data.get("held_pct_insiders")
+    )
+    if not has_any:
+        lines.append("")
+        lines.append("보유자 정보 없음 (ETF·신규 상장·소형주의 경우 데이터가 제공되지 않을 수 있습니다).")
+        return "\n".join(lines)
+
     inst_pct = data.get("held_pct_institutions")
     insd_pct = data.get("held_pct_insiders")
     if inst_pct is not None or insd_pct is not None:
@@ -1923,7 +1945,7 @@ async def get_us_holders(ticker: str) -> str:
         lines.append("기관 | 보유% | 주식수 | 평가액 | 변동% | 보고일")
         lines.append("---|---|---|---|---|---")
         for h in inst:
-            holder = (h.get("holder") or "-")[:30]
+            holder = ((h.get("holder") or "-").strip())[:30].rstrip()
             pct = h.get("pctheld")
             pct_s = f"{pct*100:.2f}%" if isinstance(pct, (int, float)) else "-"
             shares = h.get("shares") or 0
@@ -1940,7 +1962,7 @@ async def get_us_holders(ticker: str) -> str:
         lines.append("펀드 | 보유% | 주식수 | 평가액")
         lines.append("---|---|---|---")
         for h in mf:
-            holder = (h.get("holder") or "-")[:35]
+            holder = ((h.get("holder") or "-").strip())[:35].rstrip()
             pct = h.get("pctheld")
             pct_s = f"{pct*100:.2f}%" if isinstance(pct, (int, float)) else "-"
             shares = h.get("shares") or 0
