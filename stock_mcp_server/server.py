@@ -27,6 +27,8 @@ from stock_mcp_server.naver import (
     get_multi_stocks as naver_get_multi_stocks,
     get_multi_chart_stats as naver_get_multi_chart_stats,
     scan_stocks_to_snapshot as naver_scan_snapshot,
+    get_etf_list as naver_get_etf_list,
+    get_etf_detail as naver_get_etf_detail,
 )
 from stock_mcp_server._excel import (
     get_snapshot_dir,
@@ -52,10 +54,7 @@ import pandas as pd
 
 
 def safe_tool(func):
-    """MCP 도구 함수의 예외를 사용자 친화적 메시지로 변환합니다.
-
-    성공 응답에는 하루 1회 업데이트 알림을 덧붙여 LLM이 사용자에게 전달합니다.
-    """
+    """MCP 도구 함수의 예외를 사용자 친화적 메시지로 변환합니다."""
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
@@ -72,16 +71,6 @@ def safe_tool(func):
                 f"⚠️ 데이터 처리 중 오류가 발생했습니다: {type(e).__name__}\n"
                 f"종목코드가 올바른지, 상장된 종목인지 확인해주세요."
             )
-
-        if isinstance(result, str):
-            try:
-                from stock_mcp_server._update_check import get_update_notice
-
-                notice = await get_update_notice()
-                if notice:
-                    result = result + notice
-            except Exception:
-                pass  # 알림 실패가 tool 응답을 막아선 안 됨
         return result
 
     return wrapper
@@ -104,147 +93,15 @@ mcp = FastMCP(
 
 이 규칙을 어기면 잘못된 종목 분석으로 사용자를 오도할 수 있다.
 
-## 차트 시각화 규칙
+## 도구 역할 구분
+- `get_chart`: **OHLCV 시계열 데이터** (수치 분석·요약���, count 최소 120)
+- `get_indicators`: **기술지표 판정값** (RSI/MACD/Phase 등 숫자+라벨)
+- `get_price`: **현재가 스냅샷** (단일 시점, 시계열 아님)
 
-### 🔴 주가 차트 렌더링 (절대 원칙)
-
-**artifact에 캔들/가격 시계열 차트를 포함할 때는 반드시 `get_chart_html` 호출.**
-분석 응답·대시보드·시각화 등 용도 무관. 차트가 답변에 들어가면 이 도구.
-
-```
-get_chart_html(code, "day", count=120)  → 완성 HTML (SVG, MA5/20/60, 거래량, 마커 포함)
-```
-
-**직접 작성 절대 금지:**
-- Chart.js / chartjs-chart-financial / ApexCharts / Plotly → 사용 X
-- Canvas 2D API로 캔들 그리기 X
-- SVG/HTML로 처음부터 차트 제작 X
-- 이동평균·볼린저밴드 수동 계산·렌더 X
-
-### 도구 역할 구분
-- `get_chart_html`: **시각화용** (artifact에 렌더할 HTML)
-- `get_chart`: **데이터 분석용** (OHLCV 텍스트 — 수치 계산·요약만)
-- `get_indicators`: **판정값** (RSI/MACD/Phase 등 숫자+라벨)
-
-### 시계열 대체 소스 금지
-- `get_flow`의 [참고] 종가·거래량 컬럼을 차트 소스로 사용 X
-- `get_multi_chart_stats`의 집계값을 시계열 차트 X
-- `get_indicators`의 `candle`(최신 1봉) X
-- `get_price`의 스냅샷 X
-
-OHL 없이 close만으로 line chart 그리지 말 것.
-
-### 기본 기간
-- **차트는 반드시 120일 이상 불러와서 그린다.** 60일 같은 짧은 기간으로 호출하지 말 것.
-- `get_chart` 호출 시 `count` 파라미터를 명시적으로 120 이상으로 설정할 것.
-- 사용자가 "3개월" 같이 짧은 기간을 요청해도 최소 120일 데이터는 불러와야 기술적 분석이 의미 있음.
-- 최소 권장: 120, 기본 권장: 120~180, 상한: 500.
-
-### 필수 구성 (절대 생략 금지)
-- **캔들 차트는 반드시 상단 캔들 패널 + 하단 거래량 패널 세트로 구성한다.**
-- 거래량 패널 없이 캔들만 그리는 것은 금지. 무조건 세트로 묶일 것.
-
-### 레이아웃
-- 캔들 패널: 전체 차트 높이의 약 73%
-- 간격(GAP): 두 패널 사이 ≈ 10px 공백
-- 거래량 패널: 전체 차트 높이의 약 22%
-- 거래량 바 색상은 해당 봉의 상승/하락 색상과 동일하게 (양봉 빨강, 음봉 파랑)
-
-### 영역 구분
-- 전체 오른쪽 여백: PAD_R = AXIS_W + LABEL_W
-- AXIS_W (≈ 42px): 차트 영역 바로 오른쪽. 세로 축선 + tick + 가격 숫자("XX만")만 표시
-- LABEL_W (≈ 148px): AXIS_W 오른쪽. S/R 라벨명과 가격을 2줄로 좌측 정렬 표시
-- 두 영역은 물리적으로 분리되어 절대 겹치지 않아야 함
-
-### 가격축
-- 눈금선(grid)은 PAD_L ~ AXIS_X 구간에만 그릴 것
-- tick은 AXIS_X에서 오른쪽으로 4px 짧게 표시
-- 가격 숫자는 tick 바로 오른쪽(AXIS_X + 6px)에 표시
-
-### S/R 라벨 렌더링
-- S/R 선은 캔들 패널 내 AXIS_X(= W - PAD_R) 까지만 그릴 것
-- 라벨은 LABEL_X(= W - PAD_R + AXIS_W + 4) 기준 좌측 정렬
-- 1행: 라벨명 (예: "강한 지지 (이중저점)")
-- 2행: 가격 (예: "16.7만"), 1행보다 약간 작은 폰트 + 낮은 opacity
-
-### 캔들 스페이싱 (⚠️ 반드시 준수)
-
-**이 공식을 무조건 사용할 것. 다른 공식 쓰지 말 것:**
-
-```javascript
-const availableW = W - PAD_L - PAD_R;
-const step = availableW / candles.length;
-const bodyW = Math.max(1, step - 1);
-// 거래량 바도 동일한 bodyW 사용
-```
-
-**절대 쓰면 안 되는 패턴 (Claude가 자주 실수하는 것):**
-
-```javascript
-// ❌ 금지 1: 비율 기반 — 간격이 너무 벌어져서 이질감 발생
-const bW = sw * 0.7;
-const bW = sw * 0.62;
-const bW = step * 0.8;
-
-// ❌ 금지 2: 최소값 강제 — step이 작을 때 캔들 겹침
-const bW = Math.max(3, sw * 0.62);
-const bW = Math.max(2, ...);
-
-// ❌ 금지 3: 고정값
-const CANDLE_W = 100;
-const bW = 12;
-```
-
-**반드시 써야 하는 패턴:**
-
-```javascript
-// ✅ 올바른 공식 — 이것만 사용
-const bodyW = Math.max(1, step - 1);
-```
-
-**이 공식의 의미:**
-- `step - 1`: 캔들 간 1px 공백 (양쪽 0.5px씩)
-- `Math.max(1, ...)`: step이 1px 이하일 때도 최소 1px 보장
-- 비율이 아니라 **절대값 1px 공백**이 핵심
-
-**예시 값:**
-- 120일 일봉 + 폭 800px → step ≈ 6px, bodyW ≈ 5px (자연스러움)
-- 60일 일봉 + 폭 800px → step ≈ 12px, bodyW ≈ 11px
-
-### 전체 캔들 차트 렌더링 참고 코드
-
-```javascript
-// 1. 가용 공간 계산
-const availableW = W - PAD_L - PAD_R;
-const step = availableW / candles.length;
-const bodyW = Math.max(1, step - 1);   // ← 이 공식 그대로 사용
-const wickW = 1;                        // 심지는 1px 고정
-
-// 2. 캔들 그리기
-candles.forEach((c, i) => {
-  const cx = PAD_L + (i + 0.5) * step;
-  const up = c.close >= c.open;
-  const color = up ? '#E24B4A' : '#1D9E75';  // 한국식: 양봉 빨강, 음봉 파랑
-
-  // 심지 (high-low)
-  line(cx, py(c.high), cx, py(c.low), strokeWidth=wickW, stroke=color);
-
-  // 몸통
-  const bodyTop = py(Math.max(c.open, c.close));
-  const bodyH = Math.max(1, Math.abs(py(c.open) - py(c.close)));
-  rect(cx - bodyW/2, bodyTop, bodyW, bodyH, fill=color);
-});
-
-// 3. 거래량 패널 (필수, 같은 bodyW 사용)
-const maxVol = Math.max(...candles.map(c => c.volume));
-candles.forEach((c, i) => {
-  const cx = PAD_L + (i + 0.5) * step;
-  const up = c.close >= c.open;
-  const color = up ? '#E24B4A' : '#1D9E75';
-  const h = (c.volume / maxVol) * (volPanelH - 4);
-  rect(cx - bodyW/2, volPanelBottom - h, bodyW, h, fill=color);
-});
-```
+## ETF 도구
+- `get_etf_list`: ETF 목록 조회 + 카테고리 필터 + 정렬
+- `get_etf_info`: ETF 상세 정보 (기초지수, 보수율, 구성종목, 수익률)
+- ETF도 일반 종목 도구(`search`, `get_price`, `get_chart`)로 조회 가능
 """,
 )
 
@@ -341,107 +198,58 @@ async def get_chart(code: str, timeframe: str = "day", count: int = 120) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
-@safe_tool
-@track_metrics("get_chart_html")
-async def get_chart_html(
-    code: str,
-    timeframe: str = "day",
-    count: int = 120,
-    timeframes: list[str] | None = None,
-    show_sr: bool = True,
-    custom_sr: list[dict] | None = None,
-) -> str:
-    """차트HTML — 완성된 캔들+거래량 차트 HTML 반환. candlestick chart, price visualization, stock dashboard, OHLCV chart.
-
-    🔴 **절대 규칙 — artifact에 주가/캔들/시계열 차트를 포함하는 모든 경우 이 도구 호출:**
-    - "차트 보여줘" / "분석 대시보드" / "주가 차트" / "시각화" / "dashboard" / "widget" → 반드시 사용
-    - 분석 응답(analyze, review, breakdown)에 차트를 포함할 때도 → 반드시 사용
-    - 단순 데이터 요청에도 차트가 답변에 들어가면 → 반드시 사용
-
-    🔴 **직접 작성 절대 금지:**
-    - Chart.js, chartjs-chart-financial, ApexCharts, Plotly 등 외부 라이브러리 코드 X
-    - Canvas 2D API로 직접 캔들 그리기 X
-    - SVG/HTML로 처음부터 차트 만들기 X
-    - 이동평균·볼린저·지지저항 선을 수동 계산해 그리기 X
-    → 이 도구가 이미 SVG 기반 완성본(MA5/20/60, 고점/저점 마커, 거래량 패널,
-    지지/저항 영역 강도별 오버레이, 라이트/다크 자동)을 제공함.
-
-    ⭐ **멀티 타임프레임** — 일/주/월을 한 번에 보고 싶을 때:
-    - `timeframes=["day","week","month"]` 로 호출 → 세로로 배치된 통합 HTML
-    - 각 프레임 count는 자동 (일봉 120 / 주봉 52 / 월봉 24)
-    - 단일 프레임 원하면 기존대로 `timeframe="day"`
-
-    ⭐ **Claude 판단 S/R 반영** — 분석 내용과 차트 일관성:
-    분석에서 "저는 1,520을 저항으로 봅니다"라고 말하면 `custom_sr`로 차트에 **직접 표시**:
-    ```
-    custom_sr=[
-        {"price": 1520, "kind": "resistance", "label": "전고점"},
-        {"price": 1440, "kind": "support", "strength": "strong"},
-        {"low": 1270, "high": 1300, "kind": "support", "label": "주요 지지대"},
-    ]
-    ```
-    - price 단일값 → 자동으로 얇은 band (±0.3%)
-    - low/high 지정 → 그대로 band
-    - label 주면 차트에 그 텍스트 표시 (없으면 "저항"/"지지" 자동)
-    - strength: weak/medium/strong (기본 medium, 오버레이 투명도 조정)
-    - custom_sr 지정 시 자동 계산은 스킵됨 (Claude 판단 우선)
-
-    ⚠️ **결과 처리 규칙:**
-    - 반환된 HTML을 artifact에 **그대로** 출력 (재파싱·재렌더링 금지)
-
-    Args:
-        code: 종목코드 6자리 (예: "005930")
-        timeframe: 단일 프레임 — "day"(일봉), "week"(주봉), "month"(월봉)
-        count: 단일 프레임 캔들 개수 (기본 120, 최대 500)
-        timeframes: 멀티 프레임 리스트 (예: ["day","week","month"]). 지정 시 timeframe/count 무시.
-        show_sr: 자동 S/R 오버레이 표시 (기본 True). custom_sr 있으면 무시됨.
-        custom_sr: Claude 판단 S/R 리스트. 지정 시 자동 계산 대신 이것 사용.
-    """
-    info = await get_current_price(code)
-    name = info.get("name", code) if info else code
-
-    # 멀티 프레임 모드
-    if timeframes:
-        frame_defaults = {"day": 120, "week": 52, "month": 24}
-        frames = []
-        for tf in timeframes:
-            c = frame_defaults.get(tf, 120)
-            ohlcv = await get_ohlcv(code, tf, c)
-            if ohlcv:
-                frames.append({"timeframe": tf, "ohlcv": ohlcv})
-        if not frames:
-            return f"종목코드 {code}의 차트 데이터를 가져올 수 없습니다."
-        html = render_multi_chart_html(code, name, frames, show_sr=show_sr, custom_sr=custom_sr)
-    else:
-        # 단일 프레임 모드
-        count = min(count, 500)
-        ohlcv = await get_ohlcv(code, timeframe, count)
-        if not ohlcv:
-            return f"종목코드 {code}의 차트 데이터를 가져올 수 없습니다."
-        html = render_chart_html(
-            code, name, ohlcv,
-            timeframe=timeframe, show_sr=show_sr, custom_sr=custom_sr,
-        )
-
-    # 결과가 60KB 초과 시 파일 저장 + 경로 반환 (MCP 응답 크기 제한 회피)
-    MAX_INLINE = 60_000
-    if len(html) <= MAX_INLINE:
-        return html
-
-    chart_dir = get_snapshot_dir() / "charts"
-    chart_dir.mkdir(parents=True, exist_ok=True)
-    tf_label = "-".join(timeframes) if timeframes else timeframe
-    fname = chart_dir / f"{code}_{tf_label}.html"
-    fname.write_text(html, encoding="utf-8")
-    size_kb = len(html) / 1024
-
-    return (
-        f"✓ 차트 HTML 생성 완료 ({size_kb:.0f}KB — 멀티프레임이라 파일로 저장)\n"
-        f"경로: {fname}\n\n"
-        f"사용자에게 이 경로를 안내해주세요. 브라우저에서 직접 열면 "
-        f"캔들차트 + 거래량 + S/R 오버레이가 표시됩니다."
-    )
+# --- get_chart_html 비활성화 (v0.2.5~) ---
+# 차트 HTML 렌더링 도구. 필요 시 주석 해제.
+#
+# @mcp.tool()
+# @safe_tool
+# @track_metrics("get_chart_html")
+# async def get_chart_html(
+#     code: str,
+#     timeframe: str = "day",
+#     count: int = 120,
+#     timeframes: list[str] | None = None,
+#     show_sr: bool = True,
+#     custom_sr: list[dict] | None = None,
+# ) -> str:
+#     """차트HTML — 완성된 캔들+거래량 차트 HTML 반환."""
+#     info = await get_current_price(code)
+#     name = info.get("name", code) if info else code
+#     if timeframes:
+#         frame_defaults = {"day": 120, "week": 52, "month": 24}
+#         frames = []
+#         for tf in timeframes:
+#             c = frame_defaults.get(tf, 120)
+#             ohlcv = await get_ohlcv(code, tf, c)
+#             if ohlcv:
+#                 frames.append({"timeframe": tf, "ohlcv": ohlcv})
+#         if not frames:
+#             return f"종목코드 {code}의 차트 데이터를 가져올 수 없습니다."
+#         html = render_multi_chart_html(code, name, frames, show_sr=show_sr, custom_sr=custom_sr)
+#     else:
+#         count = min(count, 500)
+#         ohlcv = await get_ohlcv(code, timeframe, count)
+#         if not ohlcv:
+#             return f"종목코드 {code}의 차트 데이터를 가져올 수 없습니다."
+#         html = render_chart_html(
+#             code, name, ohlcv,
+#             timeframe=timeframe, show_sr=show_sr, custom_sr=custom_sr,
+#         )
+#     MAX_INLINE = 60_000
+#     if len(html) <= MAX_INLINE:
+#         return html
+#     chart_dir = get_snapshot_dir() / "charts"
+#     chart_dir.mkdir(parents=True, exist_ok=True)
+#     tf_label = "-".join(timeframes) if timeframes else timeframe
+#     fname = chart_dir / f"{code}_{tf_label}.html"
+#     fname.write_text(html, encoding="utf-8")
+#     size_kb = len(html) / 1024
+#     return (
+#         f"✓ 차트 HTML 생성 완료 ({size_kb:.0f}KB — 멀티프레임이라 파일로 저장)\n"
+#         f"경로: {fname}\n\n"
+#         f"사용자에게 이 경로를 안내해주세요. 브라우저에서 직접 열면 "
+#         f"캔들차트 + 거래량 + S/R 오버레이가 표시됩니다."
+#     )
 
 
 @mcp.tool()
@@ -1323,6 +1131,143 @@ async def get_metrics_summary(days: int = 1) -> str:
     lines.append(f"**평균 호출당 토큰: {total_tokens // max(total_calls, 1):,}**")
     lines.append("")
     lines.append(f"로그 파일: {get_metrics_file()}")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# ETF 도구
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@safe_tool
+@track_metrics("get_etf_list")
+async def get_etf_list(
+    category: str = "",
+    sort_by: str = "marketSum",
+    limit: int = 20,
+) -> str:
+    """ETF목록 — ETF 전체 목록 조회 및 카테고리별 필터링.
+
+    category: 카테고리 필터 (빈 문자열=전체). 가능한 값:
+      "국내 ���장지수", "국내 업종/테마", "국내 파생",
+      "해외 주식", "원자��", "채권/금리", "단기자금"
+    sort_by: 정렬 기준 — "marketSum"(시가총액), "quant"(거래량),
+      "threeMonthEarnRate"(3개월수익률)
+    limit: 반환 개수 (기본 20, 최대 50)
+    """
+    data = await naver_get_etf_list(
+        category=category or None,
+        sort_by=sort_by,
+        limit=limit,
+    )
+
+    items = data["items"]
+    if not items:
+        return "조건에 맞는 ETF가 없습니다."
+
+    lines = [
+        f"ETF 목록 ({data['total']}개 중 상위 {len(items)}개"
+        + (f", 카테고리: {category}" if category else "")
+        + ")",
+        "",
+    ]
+
+    for it in items:
+        chg = it.get("change_rate", 0) or 0
+        chg_sign = "+" if chg > 0 else ""
+        ret3m = it.get("return_3m")
+        ret3m_str = f" | 3M: {'+' if ret3m > 0 else ''}{ret3m:.1f}%" if ret3m else ""
+        mcap = it.get("market_cap", 0)
+        mcap_str = f"{mcap:,.0f}억" if mcap else ""
+
+        lines.append(
+            f"- **{it['name']}** ({it['code']}) "
+            f"| {it.get('price', 0):,.0f}원 ({chg_sign}{chg:.2f}%) "
+            f"| NAV {it.get('nav', 0):,.0f} "
+            f"| 시총 {mcap_str}"
+            f"{ret3m_str}"
+        )
+
+    lines.append("")
+    lines.append("카테고리: " + ", ".join(data["categories"].values()))
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+@safe_tool
+@track_metrics("get_etf_info")
+async def get_etf_info(code: str) -> str:
+    """ETF정보 — ETF 상세 정보 (기초지수, 보수율, 수익률, 구성종목 TOP10).
+
+    code: ETF 종목코드 (예: "069500" KODEX 200, "360750" TIGER 미국S&P500)
+    """
+    import re
+    if not re.match(r"^[A-Za-z0-9]{6}$", code):
+        return f"⚠️ 종목코드 형식이 올바르지 않습니다: {code}"
+
+    data = await naver_get_etf_detail(code)
+
+    if not data.get("name"):
+        return f"ETF코드 {code}의 정보를 가져올 수 없습니다. 코드를 확인해��세요."
+
+    lines = [
+        f"# {data['name']} ({code})",
+        "",
+        "## 기본 정보",
+        f"- 기초지수: {data.get('base_index', '-')}",
+        f"- 유형: {data.get('etf_type', '-')}",
+        f"- 자산운용사: {data.get('issuer', '-')}",
+        f"- 상장일: {data.get('listing_date', '-')}",
+        f"- 펀드보수: 연 {data.get('total_fee', 0):.3f}%",
+        f"- 펀드유형: {data.get('fund_type', '-')}",
+    ]
+
+    if data.get("dividend_base"):
+        lines.append(f"- 분배금 기준일: {data['dividend_base']}")
+
+    lines.append("")
+    lines.append("## 시세 정보")
+    lines.append(f"- 현재가: {data.get('price', 0):,.0f}원")
+
+    chg = data.get("price_change", 0)
+    chg_rate = data.get("price_change_rate", 0)
+    chg_sign = "+" if chg > 0 else ""
+    lines.append(f"- 전일대비: {chg_sign}{chg:,.0f}원 ({chg_sign}{chg_rate:.2f}%)")
+    lines.append(f"- 시가���액: {data.get('market_cap', 0):,.0f}억원")
+    lines.append(f"- 52주 최고/최저: {data.get('year_high', 0):,.0f} / {data.get('year_low', 0):,.0f}")
+    lines.append(f"- 베타: {data.get('beta', 0):.2f}")
+    lines.append(f"- 외국인 비율: {data.get('foreign_rate', 0):.2f}%")
+
+    lines.append("")
+    lines.append("## 수익률")
+    for period, key in [("1개월", "return_1m"), ("3개월", "return_3m"),
+                        ("6개월", "return_6m"), ("1년", "return_1y")]:
+        val = data.get(key, 0)
+        sign = "+" if val > 0 else ""
+        lines.append(f"- {period}: {sign}{val:.2f}%")
+
+    holdings = data.get("holdings", [])
+    if holdings:
+        has_weight = data.get("holdings_has_weight", True)
+        lines.append("")
+        lines.append(f"## 구성종목 (총 {data.get('holdings_count', len(holdings))}개)")
+        lines.append("")
+
+        if has_weight:
+            lines.append("종목명 | 비중(%)")
+            lines.append("---|---")
+            for h in holdings[:10]:
+                lines.append(f"{h['name']} | {h['weight']:.2f}%")
+            top10_sum = sum(h["weight"] for h in holdings[:10])
+            lines.append(f"**TOP10 합계** | **{top10_sum:.2f}%**")
+        else:
+            lines.append("종목명 | 주식수")
+            lines.append("---|---")
+            for h in holdings[:10]:
+                lines.append(f"{h['name']} | {h['shares']:,.0f}")
 
     return "\n".join(lines)
 

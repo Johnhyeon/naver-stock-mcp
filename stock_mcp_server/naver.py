@@ -281,8 +281,9 @@ async def get_financials(code: str) -> dict:
         th = tr.select_one("th")
         td = tr.select_one("td")
         if th and td:
-            label = th.text.strip()
-            value = td.text.strip()
+            label = th.get_text(strip=True)
+            # td 내부 탭/줄바꿈 제거 후 공백 한 칸으로 정리
+            value = " ".join(td.get_text(strip=True).split())
             if "시가총액" in label or "상장주식수" in label or "PER" in label or "PBR" in label:
                 result[label] = value
 
@@ -1052,3 +1053,181 @@ async def get_market_index() -> list[dict]:
 
     results = await asyncio.gather(fetch_one("KOSPI"), fetch_one("KOSDAQ"))
     return list(results)
+
+
+# ---------------------------------------------------------------------------
+# ETF 데이터
+# ---------------------------------------------------------------------------
+
+ETF_LIST_API = f"{BASE_URL}/api/sise/etfItemList.nhn"
+ETF_WISEREPORT_URL = "https://navercomp.wisereport.co.kr/v2/ETF/index.aspx"
+
+# etfTabCode → 카테고리명 매핑
+_ETF_TAB_NAMES = {
+    1: "국내 시장지수",
+    2: "국내 업종/테마",
+    3: "국내 파생",
+    4: "해외 주식",
+    5: "원자재",
+    6: "채권/금리",
+    7: "단기자금",
+}
+
+
+@cached(ttl_market=300, ttl_closed=3600)  # 장중 5분, 장마감 1시간
+async def get_etf_list(
+    category: str | None = None,
+    sort_by: str = "marketSum",
+    limit: int = 20,
+) -> dict:
+    """ETF 전체 목록을 가져옵니다.
+
+    Args:
+        category: 필터 카테고리 (None=전체, "국내 시장지수", "해외 주식" 등)
+        sort_by: 정렬 기준 ("marketSum", "quant", "threeMonthEarnRate", "nav")
+        limit: 반환 개수 (기본 20, 최대 50)
+    """
+    resp = await fetch(ETF_LIST_API)
+    # 네이버 ETF API는 EUC-KR 인코딩
+    import json as _json
+    data = _json.loads(resp.content.decode("euc-kr"))
+    items = data.get("result", {}).get("etfItemList", [])
+    if not items:
+        return {"items": [], "total": 0, "categories": _ETF_TAB_NAMES}
+
+    # 카테고리 필터
+    if category:
+        tab_code = None
+        for code, name in _ETF_TAB_NAMES.items():
+            if category in name or name in category:
+                tab_code = code
+                break
+        if tab_code:
+            items = [i for i in items if i.get("etfTabCode") == tab_code]
+
+    # 정렬
+    reverse = True
+    if sort_by in ("threeMonthEarnRate",):
+        items = [i for i in items if i.get(sort_by) is not None]
+    items.sort(key=lambda x: abs(x.get(sort_by, 0) or 0), reverse=reverse)
+
+    limit = min(limit, 50)
+    result_items = []
+    for it in items[:limit]:
+        result_items.append({
+            "code": it["itemcode"],
+            "name": it["itemname"],
+            "category": _ETF_TAB_NAMES.get(it.get("etfTabCode"), "기타"),
+            "price": it.get("nowVal"),
+            "change_rate": it.get("changeRate"),
+            "nav": it.get("nav"),
+            "return_3m": it.get("threeMonthEarnRate"),
+            "volume": it.get("quant"),
+            "market_cap": it.get("marketSum"),  # 억원
+        })
+
+    return {
+        "items": result_items,
+        "total": len(items),
+        "categories": _ETF_TAB_NAMES,
+    }
+
+
+def _parse_float(text: str, default: float = 0.0) -> float:
+    """쉼표·공백 등을 제거하고 float로 변환."""
+    if not text:
+        return default
+    cleaned = text.strip().replace(",", "").replace("+", "")
+    if not cleaned or cleaned in ("-", "N/A"):
+        return default
+    try:
+        return float(cleaned)
+    except ValueError:
+        return default
+
+
+@cached(ttl_market=600, ttl_closed=86400)  # 장중 10분, 장마감 1일
+async def get_etf_detail(code: str) -> dict:
+    """ETF 상세 정보를 wisereport 페이지에서 가져옵니다.
+
+    Returns:
+        기초지수, 유형, 상장일, 보수율, 운용사, NAV, 수익률,
+        구성종목 TOP10 등을 포함하는 dict.
+    """
+    resp = await fetch(ETF_WISEREPORT_URL, params={"cmp_cd": code})
+    html = resp.text
+
+    result = {"code": code}
+
+    # wisereport 페이지에 임베딩된 JS 변수 파싱
+    import json as _json
+
+    def _extract_json_var(var_name: str) -> dict | None:
+        import re as _re
+        pattern = rf"var\s+{var_name}\s*=\s*(\{{.*?\}});"
+        match = _re.search(pattern, html, _re.DOTALL)
+        if match:
+            try:
+                return _json.loads(match.group(1))
+            except (_json.JSONDecodeError, ValueError):
+                return None
+        return None
+
+    summary = _extract_json_var("summary_data")
+    product = _extract_json_var("product_summary_data")
+    status = _extract_json_var("status_data")
+    cu_raw = _extract_json_var("CU_data")
+
+    if summary:
+        result["name"] = summary.get("CMP_KOR", "")
+        result["name_eng"] = summary.get("CMP_ENG", "")
+        result["base_index"] = summary.get("BASE_IDX_NM_KOR", "")
+        result["issuer"] = summary.get("ISSUE_NM_KOR", "")
+        result["etf_type"] = summary.get("ETF_TYP_SVC_NM", "")
+        result["total_fee"] = _parse_float(summary.get("TOT_PAY", ""))
+
+    if product:
+        result["listing_date"] = product.get("LIST_DT", "")
+        result["fund_type"] = product.get("FUND_TYP", "")
+        result["fiscal_period"] = product.get("FIN_PRD", "")
+        result["dividend_base"] = product.get("DIV_BASE_DT", "")
+        result["lp_list"] = product.get("LP_NM_KOR", "")
+        result["website"] = product.get("URL", "")
+
+    if status:
+        result["price"] = _parse_float(status.get("CLS_PRC", ""))
+        result["price_change"] = _parse_float(status.get("PRC_CHG", ""))
+        result["price_change_rate"] = _parse_float(status.get("ADJ_CHG", ""))
+        result["year_high"] = _parse_float(status.get("YR_HIGH", ""))
+        result["year_low"] = _parse_float(status.get("YR_LOW", ""))
+        result["market_cap"] = _parse_float(status.get("MKT_VAL", ""))  # 억원
+        result["nav"] = _parse_float(status.get("CLS_PRC", ""))  # fallback
+        result["beta"] = _parse_float(status.get("YR_BETA", ""))
+        result["foreign_rate"] = _parse_float(status.get("FRG_RT", ""))
+        result["return_1m"] = _parse_float(status.get("ERN1", ""))
+        result["return_3m"] = _parse_float(status.get("ERN3", ""))
+        result["return_6m"] = _parse_float(status.get("ERN6", ""))
+        result["return_1y"] = _parse_float(status.get("ERN12", ""))
+        result["volume_20d_avg"] = _parse_float(status.get("AVG_TRD_QTY20", ""))
+
+    # 구성종목
+    if cu_raw and "grid_data" in cu_raw:
+        holdings = []
+        for h in cu_raw["grid_data"]:
+            name = h.get("STK_NM_KOR", "")
+            if not name:
+                continue
+            holdings.append({
+                "name": name,
+                "shares": h.get("AGMT_STK_CNT") or 0,
+                "weight": h.get("ETF_WEIGHT") or 0,
+            })
+        # 비중 순 정렬, 비중 없으면 주식수 순
+        has_weight = any(h["weight"] > 0 for h in holdings)
+        sort_key = "weight" if has_weight else "shares"
+        holdings.sort(key=lambda x: x[sort_key], reverse=True)
+        result["holdings"] = holdings
+        result["holdings_count"] = len(holdings)
+        result["holdings_has_weight"] = has_weight
+
+    return result
