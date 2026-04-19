@@ -76,6 +76,11 @@ jobs:
             dist/*.tar.gz
           generate_release_notes: true
           body: |
+            > 📬 **이메일 신청 없이 여기서만 받으시면 업데이트·출시 알림을 못 받아요.**
+            > 앞으로 새 버전·신기능 소식 받으려면 [**1분 만에 구독하기**](https://bit.ly/3QwtF6I) (구글 폼)
+
+            ---
+
             ## 📥 설치 / 업그레이드
             - **신규 사용자** (.mcpb 권장): [README 빠른 시작](https://github.com/Johnhyeon/stocklens-mcp#빠른-시작-mcpb-권장)
             - **기존 pip 사용자**: `py -m pip install --upgrade stocklens-mcp`
