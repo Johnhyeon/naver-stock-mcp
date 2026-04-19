@@ -52,3 +52,17 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["stock_mcp_server"]
+
+[tool.hatch.build.targets.sdist]
+# PyPI 사용자에게 불필요한 문서·GIF·아이콘 제외 (git 추적은 유지 → GitHub README 렌더링 정상)
+exclude = [
+    "assets/",
+    "guides/",
+    "QUALITY.md",
+    "manifest.json",
+    ".mcpbignore",
+    ".github/",
+    "tests/",
+    "CLAUDE.md",
+    "README.en.md",
+]
