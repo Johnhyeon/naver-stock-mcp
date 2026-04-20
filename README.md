@@ -44,7 +44,7 @@ Claude Desktop 확장프로그램으로 클릭 몇 번이면 설치 완료 — *
 
 **순서**
 1. [Claude Desktop 다운로드](https://claude.ai/download) → 설치 → 계정 로그인
-2. 좌상단 메뉴 → **설정 → 개발자 → 확장프로그램 설치**
+2. 좌하단 메뉴 → **설정 → 확장프로그램 설치**
 3. [Releases 페이지](https://github.com/Johnhyeon/stocklens-mcp/releases/latest)에서 `stocklens-mcp-*.mcpb` 다운로드
 4. 받은 `.mcpb` 선택 → **모두 허용**
 
