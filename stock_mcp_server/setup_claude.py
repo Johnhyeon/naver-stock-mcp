@@ -17,13 +17,32 @@ SERVER_KEY = "stocklens"
 LEGACY_KEYS = ["stock-data"]
 
 
+def _uv_tool_bin_dirs() -> list[Path]:
+    """`uv tool install`이 entry point를 배치하는 경로 후보.
+
+    uv는 `~/.local/bin` (Unix·Windows 공통)을 표준으로 쓰지만, 사용자가
+    `UV_TOOL_BIN_DIR` / `XDG_BIN_HOME`로 재정의할 수 있다. 두 경우 다 커버.
+    """
+    candidates: list[Path] = []
+    env = os.environ.get("UV_TOOL_BIN_DIR")
+    if env:
+        candidates.append(Path(env))
+    xdg = os.environ.get("XDG_BIN_HOME")
+    if xdg:
+        candidates.append(Path(xdg))
+    candidates.append(Path.home() / ".local" / "bin")
+    return [p for p in candidates if p.exists()]
+
+
 def resolve_server_entry(preferred_command: str = "stocklens") -> dict:
     """PATH 의존 없이 확실히 실행되는 MCP server config entry를 생성.
 
     우선순위:
-    1. shutil.which로 PATH에서 찾기 → 절대 경로
-    2. sysconfig scripts 디렉토리 직접 탐색 → 절대 경로
-    3. 최후 fallback: sys.executable + `-m stock_mcp_server.server`
+    1. 절대 경로가 명시되면 그대로 사용
+    2. PATH 탐색 (shutil.which)
+    3. uv tool bin 디렉토리 직접 탐색 (`~/.local/bin` 등)
+    4. sysconfig scripts 디렉토리 직접 탐색
+    5. 최후 fallback: sys.executable + `-m stock_mcp_server.server`
 
     반환된 entry는 Claude Desktop이 PATH 환경변수와 무관하게 실행 가능.
     """
@@ -36,7 +55,14 @@ def resolve_server_entry(preferred_command: str = "stocklens") -> dict:
     if found:
         return {"command": found}
 
-    # 3) sysconfig scripts 디렉토리 직접 탐색
+    # 3) uv tool bin 디렉토리 — `uv tool install` 직후 PATH 미반영 상태에서도 잡힘
+    for bin_dir in _uv_tool_bin_dirs():
+        for candidate_name in (f"{preferred_command}.exe", preferred_command):
+            candidate = bin_dir / candidate_name
+            if candidate.exists():
+                return {"command": str(candidate)}
+
+    # 4) sysconfig scripts 디렉토리 직접 탐색 (pip 호환)
     try:
         scripts_dir = Path(sysconfig.get_paths()["scripts"])
         for candidate_name in (f"{preferred_command}.exe", preferred_command):
@@ -46,8 +72,7 @@ def resolve_server_entry(preferred_command: str = "stocklens") -> dict:
     except Exception:
         pass
 
-    # 4) 최후 fallback: python -m 형태
-    #    stock_mcp_server.server 모듈 직접 실행
+    # 5) 최후 fallback: python -m 형태
     return {
         "command": sys.executable,
         "args": ["-m", "stock_mcp_server.server"],

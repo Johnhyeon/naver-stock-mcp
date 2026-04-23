@@ -59,10 +59,10 @@ exclude = [
     "assets/",
     "guides/",
     "QUALITY.md",
-    "manifest.json",
-    ".mcpbignore",
     ".github/",
     "tests/",
     "CLAUDE.md",
     "README.en.md",
+    "install.ps1",
+    "install.sh",
 ]
