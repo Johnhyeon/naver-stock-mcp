@@ -52,6 +52,8 @@ from stock_mcp_server._metrics import (
 from stock_mcp_server._indicators import (
     compute_indicators,
     AVAILABLE_INDICATORS,
+    PRESETS,
+    PRESET_NAMES,
 )
 from stock_mcp_server._chart_html import render_chart_html, render_multi_chart_html
 from stock_mcp_server import yfinance_source as us
@@ -268,12 +270,16 @@ async def get_chart(
 
     **기본값 120일 (약 6개월 거래일)**.
 
+    10년 이상 장기 데이터(백테스트, 특정일 조회)는 `export_to_excel`을 권장합니다.
+    `get_chart`로 1000봉 이상 요청 시 응답 토큰이 커져 컨텍스트를 많이 차지합니다.
+
     Args:
         code: 종목코드 6자리 (예: "005930")
         timeframe: "day"(일봉), "week"(주봉), "month"(월봉)
-        count: 가져올 봉 개수 (기본 120, 최대 500)
+        count: 가져올 봉 개수 (기본 120, 최대 3000 = 약 12년 일봉).
+            네이버 API 하드 캡이 3000이며, 이상 요청해도 3000까지만 반환됩니다.
     """
-    count = min(count, 500)
+    count = max(1, min(count, 3000))
     data = await get_ohlcv(code, timeframe, count)
     if not data:
         return f"종목코드 {code}의 차트 데이터를 가져올 수 없습니다."
@@ -282,6 +288,13 @@ async def get_chart(
     header = f"종목 {code} {tf_name} OHLCV ({len(data)}개 봉)"
     lines = [header, ""]
     lines.extend(_format_ohlcv_rows(data, is_intraday=False, decimals=0))
+
+    if len(data) >= 1000:
+        lines.append("")
+        lines.append(
+            f"💡 {len(data)}개 봉은 토큰 소비가 큽니다. "
+            f"10년치 장기 분석이 목적이면 `export_to_excel(data_type='chart', code='{code}', days={count})` 로 엑셀 저장 후 `query_excel`로 필터링하는 게 효율적입니다."
+        )
     return "\n".join(lines)
 
 
@@ -823,6 +836,15 @@ async def get_indicators(
     days: int = 260,
     include: list[str] | None = None,
     timeframe: str = "day",
+    preset: str | None = None,
+    ma_periods: list[int] | None = None,
+    rsi_period: int | None = None,
+    bollinger_period: int | None = None,
+    bollinger_sigma: float | None = None,
+    macd_fast: int | None = None,
+    macd_slow: int | None = None,
+    macd_signal: int | None = None,
+    include_series: bool = False,
 ) -> str:
     """기술지표 — 단일 종목의 이평선·RSI·MACD·볼린저·스토캐스틱 등 종합 판정.
 
@@ -831,17 +853,35 @@ async def get_indicators(
     캔들 위에서 눈으로 판단하면 됩니다. 이 도구는 플레이북 조건 필터·상태 판정처럼
     **숫자 비교가 필요할 때만** 호출하세요.
 
+    **플레이북 전용 preset**: Weinstein Stage Analysis·Minervini SEPA·O'Neil CAN SLIM·
+    Darvas Box·Zanger Momentum 등 대표 플레이북의 MA 기간·RSI 기간·slope 기준을
+    `preset` 한 번으로 세팅. 30주 이평(MA30w)·150일·200일 등 플레이북별 핵심 지표
+    서버에서 즉시 계산 — Claude 가 수동 rolling 계산할 필요 없음.
+
     OHLCV 원본 대신 계산·판정 결과만 JSON으로 반환해 토큰을 절약합니다.
 
     Args:
         code: 종목코드 (예: "005930")
-        days: 조회 일수 (기본 260, 최소 30, 최대 500)
+        days: 조회 일수 (기본 260, 최소 30, 최대 500).
+            preset="weinstein" 은 주봉 500 이상 권장, preset="sepa" 등은 300 권장.
         include: 계산할 지표 키 리스트. 기본 ["ma", "ma_phase", "volume", "candle"].
             스냅샷 지표: ma / ma_phase / ma_slope / ma_cross / rsi / macd / bollinger /
                        stochastic / obv / volume / position / candle
             구조 분석: support_resistance / volume_profile / price_channel
             (구조 분석은 days=500~750 등 긴 lookback 권장)
-        timeframe: "day"(일봉) / "week"(주봉) / "month"(월봉). 분봉은 현재 미지원.
+        timeframe: "day"(일봉) / "week"(주봉) / "month"(월봉). 분봉은 미지원.
+            Weinstein Stage 는 반드시 "week" 로 호출.
+        preset: 플레이북 preset — "weinstein"(주봉 MA30) / "sepa"(MA50/150/200) /
+            "canslim"(MA50/150/200) / "darvas"(MA20/50/200) / "zanger"(MA10/20/50/200).
+            지정 시 ma_periods·rsi_period·ma_slope_targets 자동 세팅.
+        ma_periods: 사용자 동적 이평 기간 리스트 (예: [10, 20, 30, 50, 150, 200]).
+            preset 보다 우선 적용. 미지정 시 preset 또는 기본 [5,20,60,120,240].
+        rsi_period: RSI 기간 (기본 14).
+        bollinger_period: 볼린저 기간 (기본 20).
+        bollinger_sigma: 볼린저 표준편차 배수 (기본 2.0).
+        macd_fast/slow/signal: MACD 파라미터 (기본 12/26/9).
+        include_series: True 시 MA 시계열 전체 반환 (HTML 템플릿 차트 렌더용).
+            예: ma30_series = 주봉 65개 값 배열. 차트 그릴 때만 켜세요.
 
     ma_phase 값:
         0 완전역배열 / 1 단기상승꼬임 / 2 꼬임 / 3 단기하락꼬임 / 4 완전정배열
@@ -871,19 +911,34 @@ async def get_indicators(
             f"지원하지 않는 지표: {unknown}\n"
             f"사용 가능: {AVAILABLE_INDICATORS}"
         )
+    if preset and preset not in PRESET_NAMES:
+        return f"지원하지 않는 preset: {preset}\n사용 가능: {PRESET_NAMES}"
     days = max(30, min(days, 500))
 
     ohlcv = await get_ohlcv(code, timeframe=timeframe, count=days)
     if not ohlcv:
         return f"차트 데이터를 가져올 수 없습니다: {code}"
 
-    result = compute_indicators(ohlcv, include)
+    result = compute_indicators(
+        ohlcv, include,
+        preset=preset,
+        ma_periods=ma_periods,
+        rsi_period=rsi_period,
+        bollinger_period=bollinger_period,
+        bollinger_sigma=bollinger_sigma,
+        macd_fast=macd_fast,
+        macd_slow=macd_slow,
+        macd_signal=macd_signal,
+        include_series=include_series,
+    )
     payload = {
         "code": code,
         "timeframe": timeframe,
         "days": days,
         "indicators": result,
     }
+    if include_series:
+        payload["ohlcv"] = ohlcv
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -895,6 +950,9 @@ async def get_indicators_bulk(
     days: int = 260,
     include: list[str] | None = None,
     timeframe: str = "day",
+    preset: str | None = None,
+    ma_periods: list[int] | None = None,
+    rsi_period: int | None = None,
 ) -> str:
     """기술지표벌크 — 여러 종목의 지표를 병렬 계산. 스크리닝 핵심 도구.
 
@@ -905,9 +963,13 @@ async def get_indicators_bulk(
 
     Args:
         codes: 종목코드 리스트 (최대 100개)
-        days: 조회 일수 (기본 260)
+        days: 조회 일수 (기본 260). preset 에 따라 권장 길이 다름.
         include: 지표 키 리스트 (기본 ["ma_phase", "volume"]). get_indicators 참조.
         timeframe: "day" / "week" / "month"
+        preset: 플레이북 preset — weinstein/sepa/canslim/darvas/zanger.
+            지정 시 ma_periods·rsi_period 자동 세팅.
+        ma_periods: 동적 이평 기간 리스트. preset 오버라이드.
+        rsi_period: RSI 기간 (기본 14).
 
     반환: 코드별 지표 결과 JSON.
     """
@@ -921,6 +983,8 @@ async def get_indicators_bulk(
             f"지원하지 않는 지표: {unknown}\n"
             f"사용 가능: {AVAILABLE_INDICATORS}"
         )
+    if preset and preset not in PRESET_NAMES:
+        return f"지원하지 않는 preset: {preset}\n사용 가능: {PRESET_NAMES}"
     codes = codes[:100]
     days = max(30, min(days, 500))
 
@@ -929,7 +993,12 @@ async def get_indicators_bulk(
             ohlcv = await get_ohlcv(code, timeframe=timeframe, count=days)
             if not ohlcv:
                 return code, {"error": "OHLCV 없음"}
-            return code, compute_indicators(ohlcv, include)
+            return code, compute_indicators(
+                ohlcv, include,
+                preset=preset,
+                ma_periods=ma_periods,
+                rsi_period=rsi_period,
+            )
         except Exception as e:
             return code, {"error": f"{type(e).__name__}: {e}"}
 
@@ -941,6 +1010,8 @@ async def get_indicators_bulk(
         "count": len(results),
         "results": {code: data for code, data in results},
     }
+    if preset:
+        payload["preset"] = preset
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -961,7 +1032,10 @@ async def export_to_excel(
     Args:
         data_type: "chart"(일봉 OHLCV) / "flow"(투자자별 수급) / "financial"(재무지표)
         code: 종목코드 6자리 (예: "005930")
-        days: chart/flow의 경우 과거 일수 (기본 180)
+        days: chart/flow의 경우 과거 일수 (기본 180, 최대 3000 = 약 12년 일봉).
+            chart의 경우 네이버 API 하드 캡이 3000이며, flow는 페이지네이션으로
+            더 많이 가능하지만 관행상 3000으로 제한합니다.
+            특정 과거일(예: 2023-09-27) 데이터가 필요하면 `days`를 크게 주세요.
         filename: 파일명 (비우면 자동 생성)
 
     Returns:
@@ -969,6 +1043,8 @@ async def export_to_excel(
     """
     if not code:
         return "종목코드가 필요합니다."
+
+    days = max(1, min(days, 3000))
 
     if data_type == "chart":
         data = await get_ohlcv(code, "day", days)

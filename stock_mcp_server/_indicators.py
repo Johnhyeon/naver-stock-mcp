@@ -33,6 +33,65 @@ def _to_df(ohlcv: list[dict]) -> pd.DataFrame:
 
 _MA_PERIODS = (5, 20, 60, 120, 240)
 
+
+# ─────────────────────────────────────────────────────────────
+# 플레이북 Preset — 한 번의 preset 지정으로 해당 전략에 필요한
+# MA 기간·RSI 기간·slope 기준선을 일괄 설정.
+# 각 preset 의 recommended_timeframe·recommended_days 는 문서화 목적 (자동 적용 X).
+# 플레이북 프롬프트에서 timeframe·days 를 명시적으로 전달해야 함.
+# ─────────────────────────────────────────────────────────────
+
+PRESETS: dict[str, dict] = {
+    "weinstein": {
+        "description": "Weinstein Stage Analysis — 주봉 MA30 + 기울기 + RS",
+        "ma_periods": [10, 20, 30, 40, 50],
+        "rsi_period": 14,
+        "ma_slope_targets": [30],
+        "slope_lookback": 10,
+        "recommended_timeframe": "week",
+        "recommended_days": 500,
+    },
+    "sepa": {
+        "description": "Minervini SEPA — Trend Template (MA50/150/200)",
+        "ma_periods": [10, 20, 50, 150, 200],
+        "rsi_period": 14,
+        "ma_slope_targets": [200],
+        "slope_lookback": 22,
+        "recommended_timeframe": "day",
+        "recommended_days": 300,
+    },
+    "canslim": {
+        "description": "O'Neil CAN SLIM — MA50/150/200 stacking + 분기 실적",
+        "ma_periods": [50, 150, 200],
+        "rsi_period": 14,
+        "ma_slope_targets": [200],
+        "slope_lookback": 22,
+        "recommended_timeframe": "day",
+        "recommended_days": 300,
+    },
+    "darvas": {
+        "description": "Darvas Box — 박스 돌파 모멘텀",
+        "ma_periods": [20, 50, 200],
+        "rsi_period": 14,
+        "ma_slope_targets": [50],
+        "slope_lookback": 10,
+        "recommended_timeframe": "day",
+        "recommended_days": 250,
+    },
+    "zanger": {
+        "description": "Zanger Momentum — MA10/20/50/200",
+        "ma_periods": [10, 20, 50, 200],
+        "rsi_period": 14,
+        "ma_slope_targets": [50],
+        "slope_lookback": 10,
+        "recommended_timeframe": "day",
+        "recommended_days": 250,
+    },
+}
+
+
+PRESET_NAMES = list(PRESETS.keys())
+
 # 한국어 트레이딩 전문용어 라벨.
 # 서버가 직접 반환해야 LLM 출력에서 "꼭임"/"꿰임" 같은 토크나이저 오류 방지.
 _MA_PHASE_LABELS = {
@@ -49,14 +108,29 @@ _CROSS_LABELS = {
 }
 
 
-def compute_ma(df: pd.DataFrame, periods: tuple[int, ...] = _MA_PERIODS) -> dict:
-    """각 기간의 이동평균 최신값."""
+def compute_ma(
+    df: pd.DataFrame,
+    periods: tuple[int, ...] | list[int] = _MA_PERIODS,
+    include_series: bool = False,
+) -> dict:
+    """각 기간의 이동평균 최신값 + (선택) 전체 시계열.
+
+    include_series=True 시 HTML 템플릿 차트 렌더링용으로 `maN_series` 필드를
+    함께 반환한다. 시계열 길이는 len(df) 와 같고, 초기 `period-1` 개는 null.
+    """
     result = {}
     for p in periods:
         if len(df) >= p:
-            result[f"ma{p}"] = round(float(df["close"].rolling(p).mean().iloc[-1]), 2)
+            rolling = df["close"].rolling(p).mean()
+            result[f"ma{p}"] = round(float(rolling.iloc[-1]), 2)
+            if include_series:
+                result[f"ma{p}_series"] = [
+                    round(float(v), 2) if not pd.isna(v) else None for v in rolling
+                ]
         else:
             result[f"ma{p}"] = None
+            if include_series:
+                result[f"ma{p}_series"] = [None] * len(df)
     return result
 
 
@@ -610,39 +684,92 @@ def compute_candle(df: pd.DataFrame) -> dict:
 # ─────────────────────────────────────────────────────────────
 
 _INDICATOR_MAP = {
-    "ma": lambda df: compute_ma(df),
-    "ma_phase": lambda df: compute_ma_phase(df),
-    "ma_slope": lambda df: {
-        "ma20_slope_pct": compute_ma_slope(df, 20, 10),
-        "ma60_slope_pct": compute_ma_slope(df, 60, 20),
-        "ma120_slope_pct": compute_ma_slope(df, 120, 20),
-    },
-    "ma_cross": lambda df: {
+    "ma": lambda df, cfg: compute_ma(df, cfg["ma_periods"], cfg["include_series"]),
+    "ma_phase": lambda df, cfg: compute_ma_phase(df),
+    "ma_slope": lambda df, cfg: _compute_ma_slopes(
+        df, cfg["ma_slope_targets"] or cfg["ma_periods"], cfg["slope_lookback"]
+    ),
+    "ma_cross": lambda df, cfg: {
         "ma20_60": compute_ma_cross(df, 20, 60, 30),
         "ma60_120": compute_ma_cross(df, 60, 120, 60),
     },
-    "rsi": lambda df: compute_rsi(df),
-    "macd": lambda df: compute_macd(df),
-    "bollinger": lambda df: compute_bollinger(df),
-    "stochastic": lambda df: compute_stochastic(df),
-    "obv": lambda df: compute_obv(df),
-    "volume": lambda df: compute_volume(df),
-    "position": lambda df: compute_position(df),
-    "candle": lambda df: compute_candle(df),
-    "support_resistance": lambda df: compute_support_resistance(df),
-    "volume_profile": lambda df: compute_volume_profile(df),
-    "price_channel": lambda df: compute_price_channel(df),
+    "rsi": lambda df, cfg: compute_rsi(df, cfg["rsi_period"]),
+    "macd": lambda df, cfg: compute_macd(df, cfg["macd_fast"], cfg["macd_slow"], cfg["macd_signal"]),
+    "bollinger": lambda df, cfg: compute_bollinger(df, cfg["bollinger_period"], cfg["bollinger_sigma"]),
+    "stochastic": lambda df, cfg: compute_stochastic(df),
+    "obv": lambda df, cfg: compute_obv(df),
+    "volume": lambda df, cfg: compute_volume(df),
+    "position": lambda df, cfg: compute_position(df),
+    "candle": lambda df, cfg: compute_candle(df),
+    "support_resistance": lambda df, cfg: compute_support_resistance(df),
+    "volume_profile": lambda df, cfg: compute_volume_profile(df),
+    "price_channel": lambda df, cfg: compute_price_channel(df),
 }
 
 
 AVAILABLE_INDICATORS = list(_INDICATOR_MAP.keys())
 
 
-def compute_indicators(ohlcv: list[dict], include: list[str]) -> dict:
-    """OHLCV와 요청 지표 키 리스트로 종합 지표 dict 생성."""
+def _compute_ma_slopes(df: pd.DataFrame, periods: list[int], lookback: int) -> dict:
+    """주어진 기간들의 MA 기울기를 일괄 계산."""
+    return {f"ma{p}_slope_pct": compute_ma_slope(df, p, lookback) for p in periods}
+
+
+def _resolve_config(
+    preset: str | None,
+    ma_periods: list[int] | None,
+    rsi_period: int | None,
+    bollinger_period: int | None,
+    bollinger_sigma: float | None,
+    macd_fast: int | None,
+    macd_slow: int | None,
+    macd_signal: int | None,
+    include_series: bool,
+) -> dict:
+    """preset + 명시 파라미터를 병합. 명시값이 preset 기본값을 오버라이드."""
+    preset_cfg = PRESETS.get(preset, {}) if preset else {}
+    return {
+        "ma_periods": list(ma_periods) if ma_periods else preset_cfg.get("ma_periods", list(_MA_PERIODS)),
+        "rsi_period": rsi_period if rsi_period is not None else preset_cfg.get("rsi_period", 14),
+        "bollinger_period": bollinger_period if bollinger_period is not None else 20,
+        "bollinger_sigma": bollinger_sigma if bollinger_sigma is not None else 2.0,
+        "macd_fast": macd_fast if macd_fast is not None else 12,
+        "macd_slow": macd_slow if macd_slow is not None else 26,
+        "macd_signal": macd_signal if macd_signal is not None else 9,
+        "ma_slope_targets": preset_cfg.get("ma_slope_targets"),
+        "slope_lookback": preset_cfg.get("slope_lookback", 20),
+        "include_series": include_series,
+    }
+
+
+def compute_indicators(
+    ohlcv: list[dict],
+    include: list[str],
+    *,
+    preset: str | None = None,
+    ma_periods: list[int] | None = None,
+    rsi_period: int | None = None,
+    bollinger_period: int | None = None,
+    bollinger_sigma: float | None = None,
+    macd_fast: int | None = None,
+    macd_slow: int | None = None,
+    macd_signal: int | None = None,
+    include_series: bool = False,
+) -> dict:
+    """OHLCV와 요청 지표 키 리스트로 종합 지표 dict 생성.
+
+    preset 로 플레이북 표준 파라미터 세트를 한 번에 지정하거나,
+    `ma_periods` 등 개별 파라미터로 명시 지정 가능. 명시값이 preset 오버라이드.
+    include_series=True 시 MA 시계열 반환 (HTML 템플릿 차트용).
+    """
     df = _to_df(ohlcv)
     if df.empty:
         return {"error": "OHLCV 데이터가 비어 있습니다"}
+
+    cfg = _resolve_config(
+        preset, ma_periods, rsi_period, bollinger_period, bollinger_sigma,
+        macd_fast, macd_slow, macd_signal, include_series,
+    )
 
     result = {}
     for key in include:
@@ -651,8 +778,10 @@ def compute_indicators(ohlcv: list[dict], include: list[str]) -> dict:
             result[key] = {"error": f"지원하지 않는 지표: {key}"}
             continue
         try:
-            result[key] = fn(df)
+            result[key] = fn(df, cfg)
         except Exception as e:
             result[key] = {"error": f"{type(e).__name__}: {e}"}
 
+    if preset:
+        result["_preset"] = preset
     return result
