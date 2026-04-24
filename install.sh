@@ -1,19 +1,20 @@
 #!/bin/bash
 # StockLens Installer (macOS / Linux)
-# 신규 설치 · 업데이트 · 마이그레이션 통합
+# Usage:
+#   curl -LsSf https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh | sh
+#
+# 3 steps:
+#   1) uv (Python package manager) — auto-installs Python runtime if missing
+#   2) stocklens-mcp via `uv tool install`
+#   3) Claude Desktop config via `stocklens-setup`
 
 set -e
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m'
-
-echo "=============================================="
-echo "  StockLens Installer"
-echo "  신규 설치 · 업데이트 · 마이그레이션 통합"
-echo "=============================================="
-echo ""
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
     OS="macOS"
@@ -22,87 +23,104 @@ elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
 else
     OS="Unknown"
 fi
-echo "  Detected OS: $OS"
+
+echo ""
+echo "=============================================="
+echo "  StockLens Installer ($OS)"
+echo "=============================================="
 echo ""
 
-# [1/4] Python
-echo "[1/4] Checking Python..."
-if command -v python3 &> /dev/null; then
-    PYTHON_CMD="python3"
-elif command -v python &> /dev/null; then
-    PYTHON_CMD="python"
-else
-    echo -e "      ${RED}✗ Python not installed.${NC}"
-    echo ""
-    echo "      Install Python 3.11+ first:"
-    if [[ "$OS" == "macOS" ]]; then
-        echo "        brew install python"
-    else
-        echo "        sudo apt install python3 python3-pip"
+LOCAL_BIN="$HOME/.local/bin"
+
+# ── [1/3] uv ─────────────────────────────────────────────
+echo -e "${CYAN}[1/3] Checking uv...${NC}"
+if ! command -v uv > /dev/null 2>&1; then
+    echo "      uv not found. Installing from astral.sh..."
+    if ! curl -LsSf https://astral.sh/uv/install.sh | sh; then
+        echo -e "      ${RED}[FAIL] uv installation failed.${NC}"
+        echo "      Manual install: https://docs.astral.sh/uv/getting-started/installation/"
+        exit 1
     fi
-    exit 1
-fi
-
-PYVER=$($PYTHON_CMD --version 2>&1 | awk '{print $2}')
-echo -e "      ${GREEN}✓ Python $PYVER found${NC}"
-
-PYMAJOR=$(echo $PYVER | cut -d. -f1)
-PYMINOR=$(echo $PYVER | cut -d. -f2)
-if [ "$PYMAJOR" -lt 3 ] || ([ "$PYMAJOR" -eq 3 ] && [ "$PYMINOR" -lt 11 ]); then
-    echo -e "      ${YELLOW}⚠ Python 3.11+ required (current: $PYVER)${NC}"
-    exit 1
-fi
-echo ""
-
-# [2/4] Remove legacy package (naver-stock-mcp) if present
-echo "[2/4] Checking legacy package (naver-stock-mcp)..."
-if $PYTHON_CMD -m pip show naver-stock-mcp > /dev/null 2>&1; then
-    echo "      (info) Legacy naver-stock-mcp detected. Removing..."
-    $PYTHON_CMD -m pip uninstall -y naver-stock-mcp
-    echo -e "      ${GREEN}✓ naver-stock-mcp removed${NC}"
+    # uv installer adds ~/.local/bin to PATH for new shells. Patch this session.
+    if [ -d "$LOCAL_BIN" ]; then
+        export PATH="$LOCAL_BIN:$PATH"
+    fi
+    if ! command -v uv > /dev/null 2>&1; then
+        echo -e "      ${RED}[FAIL] uv installed but not on PATH. Open a new terminal and re-run.${NC}"
+        exit 1
+    fi
+    echo -e "      ${GREEN}uv installed: $(command -v uv)${NC}"
 else
-    echo "      (skip) No legacy package to remove"
+    echo -e "      ${GREEN}uv found: $(command -v uv)${NC}"
 fi
 echo ""
 
-# [3/4] Install / upgrade stocklens-mcp
-echo "[3/4] Installing / upgrading stocklens-mcp..."
-if $PYTHON_CMD -m pip install --upgrade stocklens-mcp > /tmp/stocklens-install.log 2>&1; then
-    echo -e "      ${GREEN}✓ stocklens-mcp installed / upgraded${NC}"
-else
-    echo -e "      ${RED}✗ Installation failed${NC}"
-    echo "      Log: /tmp/stocklens-install.log"
+# ── [2/3] stocklens-mcp ──────────────────────────────────
+echo -e "${CYAN}[2/3] Installing stocklens-mcp...${NC}"
+
+# Remove legacy pip-installed package if present (avoids dual-registration confusion)
+for PYBIN in python3 python; do
+    if command -v "$PYBIN" > /dev/null 2>&1; then
+        if "$PYBIN" -m pip show naver-stock-mcp > /dev/null 2>&1; then
+            echo "      Removing legacy naver-stock-mcp (system pip)..."
+            "$PYBIN" -m pip uninstall -y naver-stock-mcp > /dev/null 2>&1 || true
+        fi
+        break
+    fi
+done
+
+# --force re-creates the tool environment, so re-running upgrades cleanly.
+if ! uv tool install --force stocklens-mcp; then
+    echo -e "      ${RED}[FAIL] uv tool install failed.${NC}"
     exit 1
+fi
+echo -e "      ${GREEN}stocklens-mcp installed via uv tool${NC}"
+echo ""
+
+# Ensure ~/.local/bin is on PATH for the rest of this session
+case ":$PATH:" in
+    *":$LOCAL_BIN:"*) ;;
+    *) [ -d "$LOCAL_BIN" ] && export PATH="$LOCAL_BIN:$PATH" ;;
+esac
+
+# ── [3/3] Claude Desktop config ──────────────────────────
+echo -e "${CYAN}[3/3] Configuring Claude Desktop...${NC}"
+if [ -x "$LOCAL_BIN/stocklens-setup" ]; then
+    "$LOCAL_BIN/stocklens-setup" stocklens
+else
+    uv tool run --from stocklens-mcp stocklens-setup stocklens
 fi
 echo ""
 
-# [4/5] Configure Claude Desktop
-echo "[4/5] Configuring Claude Desktop..."
-$PYTHON_CMD -m stock_mcp_server.setup_claude stocklens
-echo ""
-
-# [5/5] Verify installation
-echo "[5/5] Verifying installation..."
-if $PYTHON_CMD -m stock_mcp_server.doctor; then
-    :
+# ── Verify ───────────────────────────────────────────────
+echo -e "${CYAN}Verifying installation...${NC}"
+if [ -x "$LOCAL_BIN/stocklens-doctor" ]; then
+    if ! "$LOCAL_BIN/stocklens-doctor"; then
+        echo ""
+        echo -e "${RED}[FAIL] Doctor reported critical issues. See above for fix commands.${NC}"
+        exit 1
+    fi
 else
-    echo ""
-    echo -e "      ${RED}✗ Doctor reported critical issues. See above for fix commands.${NC}"
-    exit 1
+    if ! uv tool run --from stocklens-mcp stocklens-doctor; then
+        echo ""
+        echo -e "${RED}[FAIL] Doctor reported critical issues.${NC}"
+        exit 1
+    fi
 fi
 echo ""
 
 echo "=============================================="
-echo "  완료! (Installation complete)"
+echo -e "${GREEN}  Installation complete${NC}"
 echo "=============================================="
 echo ""
-echo "다음 단계:"
-echo "  1. Claude Desktop 완전히 종료"
+echo "Next steps:"
+echo "  1. Fully quit Claude Desktop"
 if [[ "$OS" == "macOS" ]]; then
-    echo "     (Cmd+Q or Menu > Quit)"
+    echo "     (Cmd+Q or menu bar -> Claude -> Quit)"
 fi
-echo "  2. Claude Desktop 재시작"
-echo "  3. 테스트: \"삼성전자 현재가\""
+echo "  2. Restart Claude Desktop"
+echo "  3. Try: '삼성전자 현재가'"
 echo ""
-echo "문제 발생 시: stocklens-doctor (진단 다시 실행)"
+echo "Update later:  uv tool upgrade stocklens-mcp"
+echo "Diagnose:      stocklens-doctor"
 echo ""

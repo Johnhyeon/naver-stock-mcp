@@ -3,9 +3,9 @@
 실행: `stocklens-doctor` 또는 `python -m stock_mcp_server.doctor`
 
 체크 항목:
-- Python 버전
-- stocklens-mcp 패키지 설치 여부
-- stocklens 실행 명령 탐색 (PATH / sysconfig)
+- uv 설치 여부 (Python 런타임 관리자)
+- stocklens-mcp 패키지 import 가능 여부
+- stocklens 실행 명령 탐색 (PATH / uv tool bin / sysconfig)
 - Claude Desktop config 파일
 - config 내 stocklens entry 유효성 (command resolvable)
 - Legacy 키 잔존 여부
@@ -25,14 +25,15 @@ try:
         get_config_path,
         SERVER_KEY,
         LEGACY_KEYS,
+        _uv_tool_bin_dirs,
     )
 except ImportError:
-    # 패키지 설치 전 직접 실행한 경우 대비
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from stock_mcp_server.setup_claude import (
         get_config_path,
         SERVER_KEY,
         LEGACY_KEYS,
+        _uv_tool_bin_dirs,
     )
 
 
@@ -68,67 +69,86 @@ class Check:
         return self
 
 
-def check_python() -> Check:
-    c = Check("Python")
-    ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    c.info(f"Version:    {ver}")
-    c.info(f"Executable: {sys.executable}")
-    if sys.version_info < (3, 11):
-        c.fail(
-            "Python 3.11+ required",
-            fix="Install Python 3.11+ from https://www.python.org/downloads/",
-        )
+def check_uv() -> Check:
+    c = Check("uv (Python runtime manager)")
+    uv = shutil.which("uv")
+    if uv:
+        c.ok("uv is installed")
+        c.info(f"Path:       {uv}")
     else:
-        c.ok("Python 3.11+ available")
+        # uv 없이도 stocklens가 동작 가능 (pip 설치 등)이지만,
+        # 권장 설치 경로는 uv이므로 warn으로 안내.
+        c.warn(
+            "uv not found in PATH",
+            fix=(
+                "Install uv (recommended):\n"
+                "  Windows: irm https://astral.sh/uv/install.ps1 | iex\n"
+                "  macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh"
+            ),
+        )
     return c
 
 
 def check_package() -> Check:
-    c = Check("Package")
+    c = Check("Package (stocklens-mcp)")
     try:
         import stock_mcp_server  # noqa: F401
-        c.ok("stocklens-mcp is installed")
+        c.ok("stocklens-mcp is importable")
         c.info(f"Location:   {Path(stock_mcp_server.__file__).parent}")
+        c.info(f"Python:     {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+        c.info(f"Executable: {sys.executable}")
     except ImportError:
         c.fail(
-            "stocklens-mcp NOT installed",
-            fix=f'"{sys.executable}" -m pip install stocklens-mcp',
+            "stocklens-mcp NOT importable in current interpreter",
+            fix="uv tool install --force stocklens-mcp",
         )
     return c
 
 
 def check_stocklens_command() -> Check:
-    c = Check("Command")
+    c = Check("Command (stocklens)")
     # 1) PATH 탐색
     exe = shutil.which("stocklens")
     if exe:
-        c.ok(f"'stocklens' command found in PATH")
+        c.ok("'stocklens' found in PATH")
         c.info(f"Path:       {exe}")
         return c
 
-    # 2) sysconfig scripts 디렉토리 직접 확인
-    scripts_dir = Path(sysconfig.get_paths()["scripts"])
-    for name in ("stocklens.exe", "stocklens"):
-        candidate = scripts_dir / name
-        if candidate.exists():
-            c.warn(
-                f"'stocklens' exists but NOT in PATH",
-                fix=(
-                    f'Add to PATH: "{scripts_dir}"\n'
-                    f'(or proceed — setup_claude will use absolute path)'
-                ),
-            )
-            c.info(f"Path:       {candidate}")
-            return c
+    # 2) uv tool bin 디렉토리 직접 확인
+    for bin_dir in _uv_tool_bin_dirs():
+        for name in ("stocklens.exe", "stocklens"):
+            candidate = bin_dir / name
+            if candidate.exists():
+                c.warn(
+                    "'stocklens' exists but not on PATH",
+                    fix=(
+                        f'Add to PATH: "{bin_dir}"\n'
+                        f'(or proceed — setup_claude will use absolute path)'
+                    ),
+                )
+                c.info(f"Path:       {candidate}")
+                return c
 
-    # 3) 어디에도 없음
+    # 3) sysconfig scripts 디렉토리 (pip 설치 호환)
+    try:
+        scripts_dir = Path(sysconfig.get_paths()["scripts"])
+        for name in ("stocklens.exe", "stocklens"):
+            candidate = scripts_dir / name
+            if candidate.exists():
+                c.warn(
+                    "'stocklens' exists in sysconfig scripts but not on PATH",
+                    fix=f'Add to PATH: "{scripts_dir}"',
+                )
+                c.info(f"Path:       {candidate}")
+                return c
+    except Exception:
+        pass
+
+    # 4) 어디에도 없음
     c.fail(
         "'stocklens' command NOT found anywhere",
-        fix=(
-            f'"{sys.executable}" -m pip install --force-reinstall stocklens-mcp'
-        ),
+        fix="uv tool install --force stocklens-mcp",
     )
-    c.info(f"Checked:    {scripts_dir}")
     return c
 
 
@@ -143,9 +163,8 @@ def check_config() -> Check:
 
     # 두 경로 모두 존재하는 비정상 케이스 경고
     from stock_mcp_server.setup_claude import _find_store_config_path
-    import os as _os
     store = _find_store_config_path()
-    std_appdata = _os.environ.get("APPDATA")
+    std_appdata = os.environ.get("APPDATA")
     std_path = Path(std_appdata) / "Claude" / "claude_desktop_config.json" if std_appdata else None
     if store and std_path and store.exists() and std_path.exists() and store != std_path:
         c.warn(
@@ -156,7 +175,7 @@ def check_config() -> Check:
     if not config_path.exists():
         c.fail(
             "Config file does not exist",
-            fix=f'"{sys.executable}" -m stock_mcp_server.setup_claude',
+            fix="stocklens-setup",
         )
         return c
 
@@ -176,18 +195,17 @@ def check_config() -> Check:
     servers = cfg.get("mcpServers", {}) or {}
     entry = servers.get(SERVER_KEY)
 
-    # Legacy 체크
     legacy_found = [k for k in LEGACY_KEYS if k in servers]
     if legacy_found:
         c.warn(
             f"Legacy entries present: {legacy_found}",
-            fix=f'"{sys.executable}" -m stock_mcp_server.setup_claude (auto-removes)',
+            fix="stocklens-setup (auto-removes)",
         )
 
     if not entry:
         c.fail(
             "'stocklens' entry missing in mcpServers",
-            fix=f'"{sys.executable}" -m stock_mcp_server.setup_claude',
+            fix="stocklens-setup",
         )
         return c
 
@@ -197,7 +215,6 @@ def check_config() -> Check:
     if args:
         c.info(f"Args:       {args}")
 
-    # Command resolvability
     if not cmd:
         c.fail("Entry has no 'command' field")
         return c
@@ -208,7 +225,7 @@ def check_config() -> Check:
         else:
             c.fail(
                 f"Command file missing: {cmd}",
-                fix=f'"{sys.executable}" -m stock_mcp_server.setup_claude',
+                fix="stocklens-setup",
             )
     else:
         resolved = shutil.which(cmd)
@@ -217,7 +234,7 @@ def check_config() -> Check:
         else:
             c.fail(
                 f"Command '{cmd}' not in PATH — Claude Desktop will fail to launch",
-                fix=f'"{sys.executable}" -m stock_mcp_server.setup_claude',
+                fix="stocklens-setup",
             )
 
     return c
@@ -249,7 +266,7 @@ def main():
     print()
 
     checks = [
-        check_python(),
+        check_uv(),
         check_package(),
         check_stocklens_command(),
         check_config(),
@@ -258,7 +275,6 @@ def main():
     for c in checks:
         print_check(c)
 
-    # 종합
     any_fail = any(c.status == "fail" for c in checks)
     any_warn = any(c.status == "warn" for c in checks)
 
@@ -273,7 +289,7 @@ def main():
     else:
         print("  [ OK ] All checks passed!")
         print("  If MCP still doesn't appear, FULLY QUIT Claude Desktop")
-        print("  (tray icon → Quit) and restart.")
+        print("  (tray icon -> Quit) and restart.")
     print("=" * 60)
 
 

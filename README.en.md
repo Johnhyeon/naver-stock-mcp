@@ -35,44 +35,50 @@ When you show AI a chart image, it **guesses the numbers and often gets them wro
 - 📁 **Excel snapshots** — Scan once, query instantly
 - 🤖 **Gemini/GPT compatible** — Export to Excel for use with other AIs
 
-## Quick Start (`.mcpb`, recommended)
+## Quick Start (one line, no Python required)
 
-Install as a Claude Desktop extension in a few clicks — **Python and dependencies bundled, no prior setup needed**.
+[`uv`](https://docs.astral.sh/uv/) installs the Python runtime for you. Paste one line into your terminal.
 
-<!-- TODO: 30-second install demo GIF — download → settings → install extension → approve -->
-![Install demo](assets/setup.gif)
+### Windows (PowerShell)
 
-**Steps**
-1. [Download Claude Desktop](https://claude.ai/download) → install → sign in
-2. Top-left menu → **Settings → Developer → Install Extension**
-3. Grab `stocklens-mcp-*.mcpb` from the [latest Releases page](https://github.com/Johnhyeon/stocklens-mcp/releases/latest)
-4. Pick the `.mcpb` → **Approve all**
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.ps1 | iex"
+```
+
+### macOS / Linux (terminal)
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/Johnhyeon/stocklens-mcp/main/install.sh | sh
+```
+
+The script handles ① uv install → ② `uv tool install stocklens-mcp` → ③ Claude Desktop config registration → ④ verification. After it finishes, **fully quit Claude Desktop (tray → Quit)** and relaunch.
 
 > 💡 **Response timing**
-> - **Installation may take a few moments.**
-> - **Permissions**: For smoother use, set the extension to **Allow all** after installing.
-> - **First call after install**: may take 1~5 minutes — Claude Desktop auto-downloads Python + dependencies.
-    No progress indicator, so if it looks stuck, **retry the same query once**.
-> - **Subsequent calls**: 1~2 seconds for first request, instant on repeat (built-in cache)
+> - **First run**: downloads package + dependencies from PyPI (10~30s)
+> - **Subsequent calls**: 1~2 seconds; instant on cache hit
 
-> ⚠️ **Do not register pip + `.mcpb` simultaneously** — they conflict and can stall responses. Existing pip users, see below
+### Update
+
+```bash
+uv tool upgrade stocklens-mcp
+```
+
+Or simply re-run the install one-liner.
 
 ---
 
 ### 🔄 Existing pip users
 
-**Switch to `.mcpb` (recommended)**:
-```bash
-py -m pip uninstall stocklens-mcp
-```
-Then delete the `"stocklens"` entry in `%APPDATA%\Claude\claude_desktop_config.json` → follow the `.mcpb` flow above.
+Removing the old pip install and switching to uv gives you an isolated environment — no more conflicts.
 
-**Stay on pip (upgrade only)**:
 ```bash
-py -m pip install --upgrade stocklens-mcp
+py -m pip uninstall stocklens-mcp        # Windows
+python3 -m pip uninstall stocklens-mcp   # macOS/Linux
 ```
 
-> 📌 Full pip install / troubleshooting: [Install guide](guides/en/INSTALL.md)
+Then run the install one-liner above. `setup_claude` auto-updates the existing Claude config entry to the new absolute path.
+
+> 📌 Manual install / troubleshooting: [Install guide](guides/en/INSTALL.md)
 
 ## Verify Installation
 
@@ -88,15 +94,13 @@ If you see the stock name, price, and volume, you're all set.
 
 <img width="797" height="948" alt="image" src="https://github.com/user-attachments/assets/1daa0535-4ab5-480c-b70f-dcfdb5c5c864" />
 
-## Installation Diagnosis (pip users only)
-
-With `.mcpb`, Claude Desktop handles everything automatically. On the pip path, if MCP doesn't appear:
+## Installation Diagnosis
 
 ```bash
 stocklens-doctor
 ```
 
-Auto-checks Python / package / command / config in 4 steps. Shows the exact fix command. Send this to anyone having install trouble.
+Auto-checks uv / package / command / config in 4 steps. Shows the exact fix command. Send this to anyone having install trouble.
 
 ## Example Queries
 
