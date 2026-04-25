@@ -54,19 +54,9 @@ Write-Host ""
 # ── [2/3] stocklens-mcp ──────────────────────────────────
 Info "[2/3] Installing stocklens-mcp..."
 
-# Remove legacy pip-installed package if present (avoids dual-registration confusion)
-$pyCmd = Get-Command py -ErrorAction SilentlyContinue
-if (-not $pyCmd) { $pyCmd = Get-Command python -ErrorAction SilentlyContinue }
-if ($pyCmd) {
-    & $pyCmd.Source -m pip show naver-stock-mcp *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Info "      Removing legacy naver-stock-mcp (system pip)..."
-        & $pyCmd.Source -m pip uninstall -y naver-stock-mcp *> $null
-    }
-}
-
 # Idempotent install: --force re-creates the tool environment if it already exists,
 # so re-running the script reliably upgrades to the latest PyPI version.
+# uv tool은 격리 환경이라 시스템 pip의 옛 naver-stock-mcp가 남아있어도 충돌하지 않음.
 & uv tool install --force stocklens-mcp
 if ($LASTEXITCODE -ne 0) {
     Err "      [FAIL] uv tool install failed."

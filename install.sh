@@ -58,18 +58,8 @@ echo ""
 # ── [2/3] stocklens-mcp ──────────────────────────────────
 echo -e "${CYAN}[2/3] Installing stocklens-mcp...${NC}"
 
-# Remove legacy pip-installed package if present (avoids dual-registration confusion)
-for PYBIN in python3 python; do
-    if command -v "$PYBIN" > /dev/null 2>&1; then
-        if "$PYBIN" -m pip show naver-stock-mcp > /dev/null 2>&1; then
-            echo "      Removing legacy naver-stock-mcp (system pip)..."
-            "$PYBIN" -m pip uninstall -y naver-stock-mcp > /dev/null 2>&1 || true
-        fi
-        break
-    fi
-done
-
 # --force re-creates the tool environment, so re-running upgrades cleanly.
+# uv tool is isolated — legacy naver-stock-mcp via system pip won't conflict.
 if ! uv tool install --force stocklens-mcp; then
     echo -e "      ${RED}[FAIL] uv tool install failed.${NC}"
     exit 1
