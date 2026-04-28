@@ -72,8 +72,11 @@ if (Test-Path $LocalBin -PathType Container) {
     }
 }
 
-# ── [3/3] Claude Desktop config ──────────────────────────
-Info "[3/3] Configuring Claude Desktop..."
+# ── [3/3] MCP target config ──────────────────────────────
+# $env:STOCKLENS_TARGET 으로 등록 대상 지정: claude-desktop / claude-code / both / auto
+if (-not $env:STOCKLENS_TARGET) { $env:STOCKLENS_TARGET = "auto" }
+
+Info "[3/3] Configuring MCP (target=$($env:STOCKLENS_TARGET))..."
 $setupExe = Join-Path $LocalBin "stocklens-setup.exe"
 if (Test-Path $setupExe) {
     & $setupExe stocklens
@@ -81,7 +84,7 @@ if (Test-Path $setupExe) {
     & uv tool run --from stocklens-mcp stocklens-setup stocklens
 }
 if ($LASTEXITCODE -ne 0) {
-    Err "      [FAIL] Claude Desktop configuration failed."
+    Err "      [FAIL] MCP configuration failed."
     exit 1
 }
 Write-Host ""

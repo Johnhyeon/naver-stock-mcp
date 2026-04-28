@@ -22,18 +22,22 @@ from pathlib import Path
 # setup_claude와 일관성 유지
 try:
     from stock_mcp_server.setup_claude import (
-        get_config_path,
+        get_claude_desktop_config_path,
+        get_claude_code_config_path,
         SERVER_KEY,
         LEGACY_KEYS,
         _uv_tool_bin_dirs,
+        _find_store_config_path,
     )
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from stock_mcp_server.setup_claude import (
-        get_config_path,
+        get_claude_desktop_config_path,
+        get_claude_code_config_path,
         SERVER_KEY,
         LEGACY_KEYS,
         _uv_tool_bin_dirs,
+        _find_store_config_path,
     )
 
 
@@ -152,41 +156,42 @@ def check_stocklens_command() -> Check:
     return c
 
 
-def check_config() -> Check:
-    c = Check("Claude Desktop Config")
-    config_path = get_config_path()
+def label_to_target(label: str) -> str:
+    return "claude-code" if "Code" in label else "claude-desktop"
 
-    # Store 버전 감지 알림
+
+def _check_config_file(label: str, config_path: Path, *, required: bool) -> Check:
+    """단일 config 파일 점검. required=False 면 부재 시 SKIP."""
+    c = Check(f"Config — {label}")
+
     if "Packages" in str(config_path) and "LocalCache" in str(config_path):
         c.info("Detected: Microsoft Store version (sandboxed path)")
     c.info(f"Path:       {config_path}")
 
-    # 두 경로 모두 존재하는 비정상 케이스 경고
-    from stock_mcp_server.setup_claude import _find_store_config_path
-    store = _find_store_config_path()
-    std_appdata = os.environ.get("APPDATA")
-    std_path = Path(std_appdata) / "Claude" / "claude_desktop_config.json" if std_appdata else None
-    if store and std_path and store.exists() and std_path.exists() and store != std_path:
-        c.warn(
-            f"Both Store and standard config files exist. Active: {config_path}",
-            fix=f"Remove unused: {std_path if config_path == store else store}",
-        )
+    # 두 Desktop config 파일이 동시에 존재하는 비정상 케이스 경고
+    if "Claude" in label and "Code" not in label:
+        store = _find_store_config_path()
+        std_appdata = os.environ.get("APPDATA")
+        std_path = Path(std_appdata) / "Claude" / "claude_desktop_config.json" if std_appdata else None
+        if store and std_path and store.exists() and std_path.exists() and store != std_path:
+            c.warn(
+                f"Both Store and standard config files exist. Active: {config_path}",
+                fix=f"Remove unused: {std_path if config_path == store else store}",
+            )
 
     if not config_path.exists():
-        c.fail(
-            "Config file does not exist",
-            fix="stocklens-setup",
-        )
+        if required:
+            c.fail("Config file does not exist", fix="stocklens-setup")
+        else:
+            c.info("Config file does not exist (target not in use — OK)")
+            c.status = "info-skip"
         return c
 
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
     except json.JSONDecodeError as e:
-        c.fail(
-            f"Config is not valid JSON: {e}",
-            fix="Back up and re-run stocklens-setup",
-        )
+        c.fail(f"Config is not valid JSON: {e}", fix="Back up and re-run stocklens-setup")
         return c
     except Exception as e:
         c.fail(f"Cannot read config: {e}")
@@ -203,10 +208,15 @@ def check_config() -> Check:
         )
 
     if not entry:
-        c.fail(
-            "'stocklens' entry missing in mcpServers",
-            fix="stocklens-setup",
-        )
+        if required or legacy_found:
+            msg = (
+                f"'{SERVER_KEY}' entry missing in mcpServers"
+                + (f" (legacy {legacy_found} present)" if legacy_found else "")
+            )
+            c.fail(msg, fix=f"stocklens-setup --target {label_to_target(label)}")
+        else:
+            c.info(f"'{SERVER_KEY}' entry not present (target not in use — OK)")
+            c.status = "info-skip"
         return c
 
     cmd = entry.get("command")
@@ -223,24 +233,60 @@ def check_config() -> Check:
         if Path(cmd).exists():
             c.ok("Command points to existing file")
         else:
-            c.fail(
-                f"Command file missing: {cmd}",
-                fix="stocklens-setup",
-            )
+            c.fail(f"Command file missing: {cmd}", fix="stocklens-setup")
     else:
         resolved = shutil.which(cmd)
         if resolved:
             c.ok(f"Command resolvable via PATH: {resolved}")
         else:
             c.fail(
-                f"Command '{cmd}' not in PATH — Claude Desktop will fail to launch",
+                f"Command '{cmd}' not in PATH — client will fail to launch the server",
                 fix="stocklens-setup",
             )
 
     return c
 
 
-STATUS_ICON = {"ok": "[ OK ]", "warn": "[WARN]", "fail": "[FAIL]", None: "[ ?  ]"}
+def check_config_desktop() -> Check:
+    return _check_config_file(
+        "Claude Desktop", get_claude_desktop_config_path(), required=False
+    )
+
+
+def check_config_code() -> Check:
+    return _check_config_file(
+        "Claude Code CLI", get_claude_code_config_path(), required=False
+    )
+
+
+def check_at_least_one_config(*configs: Check) -> Check:
+    c = Check("Registered targets")
+    registered = [
+        cc for cc in configs
+        if cc.status == "ok" or (cc.status == "warn" and "Legacy" in " ".join(cc.lines))
+    ]
+    if registered:
+        c.ok(f"{len(registered)} target(s) configured")
+        return c
+    c.fail(
+        "stocklens not registered in any MCP client (Claude Desktop / Code)",
+        fix="stocklens-setup --target {claude-desktop|claude-code|both}",
+    )
+    return c
+
+
+# 하위 호환 — 기존 import/외부 호출 보존
+def check_config() -> Check:
+    return check_config_desktop()
+
+
+STATUS_ICON = {
+    "ok": "[ OK ]",
+    "warn": "[WARN]",
+    "fail": "[FAIL]",
+    "info-skip": "[SKIP]",
+    None: "[ ?  ]",
+}
 
 
 def print_check(c: Check):
@@ -265,11 +311,16 @@ def main():
     print("=" * 60)
     print()
 
+    desktop_check = check_config_desktop()
+    code_check = check_config_code()
+
     checks = [
         check_uv(),
         check_package(),
         check_stocklens_command(),
-        check_config(),
+        desktop_check,
+        code_check,
+        check_at_least_one_config(desktop_check, code_check),
     ]
 
     for c in checks:

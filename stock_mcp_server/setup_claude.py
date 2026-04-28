@@ -104,14 +104,12 @@ def _find_store_config_path() -> Path | None:
     return None
 
 
-def get_config_path() -> Path:
-    """Claude Desktop config 경로 탐지.
+def get_claude_desktop_config_path() -> Path:
+    """Claude Desktop 앱의 mcpServers config 파일 경로.
 
     Windows 우선순위:
     1. Microsoft Store 버전 (샌드박스 경로) — Packages\\Claude_*\\LocalCache\\...
     2. 표준 .exe 설치 버전 — %APPDATA%\\Claude\\...
-
-    Store 버전이 감지되면 그쪽을 씀. 아니면 표준 경로.
     """
     if sys.platform == "win32":
         store = _find_store_config_path()
@@ -127,8 +125,63 @@ def get_config_path() -> Path:
         return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
 
 
-def configure(command: str = "stocklens") -> None:
-    config_path = get_config_path()
+def get_claude_code_config_path() -> Path:
+    """Claude Code CLI의 사용자 스코프 config (`~/.claude.json`).
+
+    Claude Code 도 Claude Desktop 과 동일한 mcpServers 객체 스키마를 쓴다.
+    파일에는 다른 사용자 설정/세션 키가 같이 들어있으므로 mcpServers 부분만
+    patching 한다.
+    """
+    return Path.home() / ".claude.json"
+
+
+# 하위 호환 — 기존 코드/외부 import 보존
+def get_config_path() -> Path:
+    return get_claude_desktop_config_path()
+
+
+# (target name, 경로 함수, 사람이 읽는 라벨)
+TARGETS: dict[str, tuple] = {
+    "claude-desktop": (get_claude_desktop_config_path, "Claude Desktop"),
+    "claude-code": (get_claude_code_config_path, "Claude Code CLI"),
+}
+
+
+def _resolve_targets(arg: str) -> list[str]:
+    """`--target` 인자를 실제 타겟 리스트로 해석. `auto` 는 환경 감지.
+
+    감지 규칙:
+    - STOCKLENS_TARGET 환경변수가 명시 (auto 외의 값) → 그 값 사용
+    - 그 외, `claude` CLI on PATH = Claude Code 환경
+    - Claude Desktop config 디렉토리 존재 = Desktop 환경
+    - 둘 다면 both, 아무것도 없으면 claude-desktop (가장 흔한 케이스)
+    """
+    if arg == "both":
+        return ["claude-desktop", "claude-code"]
+    if arg in TARGETS:
+        return [arg]
+    if arg == "auto":
+        env_target = (os.environ.get("STOCKLENS_TARGET") or "").strip().lower()
+        if env_target and env_target != "auto":
+            return _resolve_targets(env_target)
+
+        has_code = shutil.which("claude") is not None
+        desktop_dir = get_claude_desktop_config_path().parent
+        has_desktop = desktop_dir.exists()
+
+        if has_code and has_desktop:
+            return ["claude-desktop", "claude-code"]
+        if has_code:
+            return ["claude-code"]
+        return ["claude-desktop"]
+    raise ValueError(f"Invalid target: {arg}")
+
+
+def _configure_one_target(config_path: Path, label: str, *, command: str) -> None:
+    """단일 config 파일에 mcpServers.stocklens 등록."""
+    print()
+    print(f"  → {label}")
+
     config_dir = config_path.parent
     config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,7 +202,6 @@ def configure(command: str = "stocklens") -> None:
     if "mcpServers" not in config:
         config["mcpServers"] = {}
 
-    # 이전 키 자동 정리 (마이그레이션)
     removed_legacy = []
     for legacy in LEGACY_KEYS:
         if legacy in config["mcpServers"]:
@@ -158,7 +210,6 @@ def configure(command: str = "stocklens") -> None:
     if removed_legacy:
         print(f"  [OK] Removed legacy entries: {', '.join(removed_legacy)}")
 
-    # 새 키 등록 — PATH 의존 없이 확실히 실행되는 entry 사용
     entry = resolve_server_entry(command)
     config["mcpServers"][SERVER_KEY] = entry
 
@@ -166,29 +217,76 @@ def configure(command: str = "stocklens") -> None:
         json.dump(config, f, indent=2, ensure_ascii=False)
 
     print(f"  [OK] Config updated (key: {SERVER_KEY})")
-    print(f"  Path: {config_path}")
+    print(f"  Path:    {config_path}")
     print(f"  Command: {entry['command']}")
     if "args" in entry:
         print(f"  Args:    {' '.join(entry['args'])}")
-    # 검증: 기록한 command가 실제 실행 가능한지
+
     cmd = entry["command"]
     if Path(cmd).is_absolute() and not Path(cmd).exists():
         print(f"  [WARN] Recorded command file does not exist: {cmd}")
     elif not Path(cmd).is_absolute() and not shutil.which(cmd):
-        print(f"  [WARN] '{cmd}' not found in PATH. "
-              f"Run 'stocklens-doctor' to diagnose.")
+        print(f"  [WARN] '{cmd}' not found in PATH. Run 'stocklens-doctor' to diagnose.")
+
+
+def configure(command: str = "stocklens", *, targets: list[str] | None = None) -> None:
+    """선택된 모든 타겟에 stocklens MCP 등록.
+
+    targets: ["claude-desktop"], ["claude-code"], 또는 ["claude-desktop", "claude-code"].
+    None 이면 ["claude-desktop"] (하위 호환).
+    """
+    targets = targets or ["claude-desktop"]
+    unknown = [t for t in targets if t not in TARGETS]
+    if unknown:
+        raise ValueError(f"Unknown target(s): {unknown}. Valid: {list(TARGETS.keys())}")
+
+    for target in targets:
+        path_func, label = TARGETS[target]
+        _configure_one_target(path_func(), label, command=command)
+
+
+def _build_parser():
+    import argparse
+    p = argparse.ArgumentParser(
+        prog="stocklens-setup",
+        description="Register stocklens in Claude config (Desktop and/or Code CLI).",
+    )
+    p.add_argument(
+        "command",
+        nargs="?",
+        default="stocklens",
+        help="MCP 클라이언트가 실행할 커맨드 (기본: stocklens).",
+    )
+    p.add_argument(
+        "--target",
+        choices=["claude-desktop", "claude-code", "both", "auto"],
+        default="auto",
+        help=(
+            "MCP 등록 대상. claude-desktop=Claude Desktop 앱, "
+            "claude-code=Claude Code CLI, both=둘 다, auto=환경 자동 감지 "
+            "(기본: auto). STOCKLENS_TARGET 환경변수로도 지정 가능."
+        ),
+    )
+    return p
 
 
 def main():
-    command = sys.argv[1] if len(sys.argv) > 1 else "stocklens"
+    args = _build_parser().parse_args()
+    targets = _resolve_targets(args.target)
+    target_labels = ", ".join(TARGETS[t][1] for t in targets)
+
     print("==============================================")
-    print("  StockLens - Claude Desktop Setup")
+    print("  StockLens - MCP Setup")
     print("==============================================")
-    print()
+    print(f"  Targets: {target_labels}")
+
     try:
-        configure(command)
+        configure(args.command, targets=targets)
         print()
-        print("Done! Please fully quit and restart Claude Desktop.")
+        if "claude-desktop" in targets:
+            print("Done! Claude Desktop 을 완전히 종료(트레이→Quit) 후 다시 실행하세요.")
+        if "claude-code" in targets:
+            print("Done! Claude Code 새 세션부터 stocklens 도구 사용 가능.")
     except Exception as e:
         print(f"  [ERROR] {e}", file=sys.stderr)
         sys.exit(1)
